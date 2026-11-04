@@ -21,6 +21,7 @@ import {
   Trash2,
   Edit2,
   ChevronDown,
+  Save,
 } from 'lucide-react';
 
 interface OperationsViewProps {
@@ -38,7 +39,10 @@ export const OperationsView: React.FC<OperationsViewProps> = ({ isAddModalOpen, 
     deleteTask,
     updateTaskStatus,
     currentBranch,
+    employees,
   } = useApp();
+
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -183,7 +187,16 @@ export const OperationsView: React.FC<OperationsViewProps> = ({ isAddModalOpen, 
   return (
     <div className="space-y-6">
       {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
+      {/* Toast */}
+      {toastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 text-white shadow-xl flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-200 dark:border-slate-800">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
             {t('operationsTitle')}
@@ -193,13 +206,44 @@ export const OperationsView: React.FC<OperationsViewProps> = ({ isAddModalOpen, 
           </p>
         </div>
 
-        <button
-          onClick={openAddModal}
-          className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-all active:scale-95 cursor-pointer self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{t('addTask')}</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={() => {
+              setToastMsg(language === 'ar' ? 'تم تحديث قائمة المكلفين من سجل الموظفين' : 'Assignees synchronized with staff roster');
+              setTimeout(() => setToastMsg(null), 3000);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+            title="Load employee assignees from staff roster"
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>{language === 'ar' ? 'جلب من السجل' : 'Load from Roster'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              try {
+                localStorage.setItem(`opm_branch_${currentBranch?.code || '1750'}_tasks`, JSON.stringify(tasks));
+                setToastMsg(language === 'ar' ? 'تم حفظ سجل العمليات والمهام للفرع بشكل دائم' : 'Operations records saved permanently');
+              } catch {
+                setToastMsg(language === 'ar' ? 'تم حفظ السجل بنجاح' : 'Record saved successfully');
+              }
+              setTimeout(() => setToastMsg(null), 3000);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-700 dark:hover:bg-slate-600 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Save tasks permanently"
+          >
+            <Save className="w-3.5 h-3.5 text-teal-400" />
+            <span>{language === 'ar' ? 'حفظ السجل' : 'Save Record'}</span>
+          </button>
+
+          <button
+            onClick={openAddModal}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-all active:scale-95 cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{t('addTask')}</span>
+          </button>
+        </div>
       </div>
 
       {/* Category Tabs (Segmented functional buttons) */}

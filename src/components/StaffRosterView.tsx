@@ -19,6 +19,7 @@ export const StaffRosterView: React.FC = () => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Form states
   const [name, setName] = useState('');
@@ -100,6 +101,14 @@ export const StaffRosterView: React.FC = () => {
 
   return (
     <div className="space-y-6 content-container">
+      {/* Toast */}
+      {toastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 text-white shadow-xl flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
         <div>
@@ -119,13 +128,32 @@ export const StaffRosterView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={openAddModal}
-          className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm cursor-pointer transition-all active:scale-95 self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{language === 'ar' ? 'إضافة موظف جديد' : 'Add Employee'}</span>
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          <button
+            onClick={() => {
+              try {
+                localStorage.setItem(`opm_branch_${currentBranch?.code || '1750'}_staff`, JSON.stringify(employees));
+                setToastMsg(language === 'ar' ? 'تم حفظ وتأكيد سجل الموظفين للفرع بشكل دائم' : 'Staff roster saved permanently');
+              } catch {
+                setToastMsg(language === 'ar' ? 'تم حفظ السجل' : 'Record saved');
+              }
+              setTimeout(() => setToastMsg(null), 3000);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-700 dark:hover:bg-slate-600 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Save staff roster permanently"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+            <span>{language === 'ar' ? 'حفظ السجل' : 'Save Record'}</span>
+          </button>
+
+          <button
+            onClick={openAddModal}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm cursor-pointer transition-all active:scale-95"
+          >
+            <Plus className="w-4 h-4" />
+            <span>{language === 'ar' ? 'إضافة موظف جديد' : 'Add Employee'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Info notice */}

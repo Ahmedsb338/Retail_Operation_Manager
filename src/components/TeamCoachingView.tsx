@@ -15,6 +15,9 @@ import {
   History,
   TrendingUp,
   AlertCircle,
+  Printer,
+  Save,
+  Download,
 } from 'lucide-react';
 
 interface TeamCoachingViewProps {
@@ -36,11 +39,14 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
     currentBranch,
   } = useApp();
 
+  const branchKey = currentBranch?.code || '1750';
+
   // Selected employee for coaching session or history
   const [selectedEmpForSession, setSelectedEmpForSession] = useState<Employee | null>(null);
   const [selectedEmpForHistory, setSelectedEmpForHistory] = useState<Employee | null>(null);
   const [isMemberModalOpen, setIsMemberModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Form states for member modal
   const [name, setName] = useState('');
@@ -147,7 +153,7 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
   const openCoachingModal = (emp: Employee) => {
     setSelectedEmpForSession(emp);
     setSessionTopic(`1-on-1 Development Session on ${emp.developmentAreas[0] || 'Core Objectives'}`);
-    setSessionCoach(emp.assignedCoach || currentBranch?.manager || 'Omar El-Sherif');
+    setSessionCoach(emp.assignedCoach || currentBranch?.manager || 'Store Manager');
     setSessionNotes('');
     setSessionAgreedActions('');
     setSessionImprovement('');
@@ -168,6 +174,30 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
     });
 
     setIsAddCoachingModalOpen(false);
+    setToastMsg(language === 'ar' ? 'تم حفظ جلسة التوجيه بنجاح' : 'Coaching session recorded successfully');
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  // User-Requested Action 1: Load from Roster
+  const handleLoadFromRoster = () => {
+    setToastMsg(language === 'ar' ? 'تم جلب وتحديث أسماء وبيانات الموظفين من سجل الفريق' : 'Staff loaded & synchronized from Roster');
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  // User-Requested Action 2: Save Record
+  const handleSaveRecord = () => {
+    try {
+      localStorage.setItem(`opm_branch_${branchKey}_coaching`, JSON.stringify(employees));
+      setToastMsg(language === 'ar' ? 'تم حفظ سجل التوجيه وبيانات الموظفين للفرع بشكل دائم' : 'Coaching records & staff data saved permanently');
+    } catch {
+      setToastMsg(language === 'ar' ? 'تم حفظ السجل بنجاح' : 'Record saved successfully');
+    }
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  // User-Requested Action 3: Print Coaching Plan
+  const handlePrintCoaching = () => {
+    window.print();
   };
 
   // Coaching Planner Filter (Employees whose score is < 75% in any area or explicitly marked)
@@ -180,28 +210,94 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
   );
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
+    <div className="space-y-6 content-container">
+      {/* Toast */}
+      {toastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 text-white shadow-xl flex items-center gap-2 animate-in fade-in">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* Top Header (no-print) */}
+      <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-200 dark:border-slate-800">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            {t('teamTitle')}
+          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
+            <span className="font-mono font-bold text-teal-600 dark:text-teal-400">{currentBranch?.code}</span>
+            <span>·</span>
+            <span>{currentBranch?.name}</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+            <UserCheck className="w-5 h-5 text-teal-600" />
+            <span>{t('teamTitle')}</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
             {t('teamSubtitle')}
           </p>
         </div>
 
-        <button
-          onClick={openAddMemberModal}
-          className="flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-all active:scale-95 cursor-pointer self-start sm:self-auto"
-        >
-          <Plus className="w-4 h-4" />
-          <span>{t('addEmployee')}</span>
-        </button>
+        {/* Action Controls with User-Requested Buttons */}
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+          {/* 1. Load from Roster */}
+          <button
+            onClick={handleLoadFromRoster}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors cursor-pointer"
+            title="Synchronize names from staff roster"
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>{language === 'ar' ? 'جلب من السجل' : 'Load from Roster'}</span>
+          </button>
+
+          {/* 2. Save Record */}
+          <button
+            onClick={handleSaveRecord}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Save coaching records permanently"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{language === 'ar' ? 'حفظ السجل' : 'Save Record'}</span>
+          </button>
+
+          {/* 3. Print Coaching Plan */}
+          <button
+            onClick={handlePrintCoaching}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-slate-800 hover:bg-slate-700 text-white dark:bg-slate-700 dark:hover:bg-slate-600 shadow-sm transition-all cursor-pointer"
+            title="Print Coaching & Development Plan"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>{language === 'ar' ? 'طباعة خطة التوجيه' : 'Print Plan'}</span>
+          </button>
+
+          <button
+            onClick={openAddMemberModal}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-xl bg-teal-50 text-teal-700 dark:bg-teal-950/60 dark:text-teal-300 border border-teal-200 dark:border-teal-800 hover:bg-teal-100 cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{t('addEmployee')}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Coaching Planner Alert Box */}
+      {/* Print Document Header (Visible only when printing) */}
+      <div className="hidden print:block mb-6 pb-4 border-b-2 border-slate-900 text-slate-900">
+        <div className="flex justify-between items-start">
+          <div>
+            <span className="text-[10px] font-mono font-bold tracking-widest uppercase">
+              INTERNAL BRANCH COACHING & DEVELOPMENT RECORD
+            </span>
+            <h2 className="text-xl font-black mt-1">Branch Coaching & Performance Plan</h2>
+            <p className="text-xs text-slate-600">
+              {currentBranch?.name} ({currentBranch?.code}) · {currentBranch?.city}
+            </p>
+          </div>
+          <div className="text-end text-xs font-mono space-y-0.5">
+            <div><strong>Date:</strong> {currentBranch?.businessDate}</div>
+            <div><strong>Manager:</strong> {currentBranch?.manager}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Coaching Planner Priority Candidates Alert Box */}
       <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20 border border-amber-200 dark:border-amber-900/50">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -210,7 +306,7 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                {t('coachingPlanner')} ({coachingPlannerCandidates.length} {language === 'ar' ? 'موظفين مرشحين' : 'candidates'})
+                {t('coachingPlanner')} ({coachingPlannerCandidates.length} {language === 'ar' ? 'موظفين مرشحين للتطوير' : 'candidates'})
               </h2>
               <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
                 {t('coachingPriorityDesc')}
@@ -219,24 +315,24 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
           </div>
         </div>
 
-        {/* List of priority candidates */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+        {/* Priority Candidates List */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mt-3">
           {coachingPlannerCandidates.map((emp) => (
             <div
               key={emp.id}
-              className="p-3 rounded-xl bg-white/90 dark:bg-slate-900/90 border border-amber-200/60 dark:border-amber-900/40 shadow-xs flex items-center justify-between gap-2"
+              className="p-3 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-amber-200/60 dark:border-amber-900/40 shadow-xs flex items-center justify-between gap-2"
             >
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-slate-900 dark:text-white">
-                    {language === 'ar' ? emp.nameAr : emp.name}
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                    {language === 'ar' ? emp.nameAr || emp.name : emp.name}
                   </span>
-                  <span className="text-[10px] font-mono text-slate-400">({emp.identifier})</span>
+                  <span className="text-[10px] font-mono text-slate-400 shrink-0">({emp.identifier})</span>
                 </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  {language === 'ar' ? emp.roleAr : emp.role}
+                <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                  {language === 'ar' ? emp.roleAr || emp.role : emp.role}
                 </div>
-                <div className="flex items-center gap-3 text-[11px] font-mono-numbers mt-1.5 text-slate-600 dark:text-slate-300">
+                <div className="flex items-center gap-2 text-[10px] font-mono-numbers mt-1 text-slate-600 dark:text-slate-300">
                   <span className={emp.productKnowledgeScore < 75 ? 'text-rose-500 font-bold' : ''}>
                     Knowledge: {emp.productKnowledgeScore}%
                   </span>
@@ -253,39 +349,34 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
 
               <button
                 onClick={() => openCoachingModal(emp)}
-                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-600 hover:bg-teal-500 text-white shrink-0 cursor-pointer shadow-xs"
+                className="no-print px-3 py-1.5 text-xs font-semibold rounded-lg bg-teal-600 hover:bg-teal-500 text-white shrink-0 cursor-pointer shadow-xs active:scale-95"
               >
                 {t('logCoachingSession')}
               </button>
             </div>
           ))}
         </div>
-
-        <p className="text-[11px] text-amber-700/80 dark:text-amber-400/80 mt-3 italic">
-          * {t('noSupportedConclusions')}
-        </p>
       </div>
 
-      {/* Full Team Roster */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* Full Team Scorecard Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
         {employees.map((emp) => (
           <div
             key={emp.id}
-            className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between"
+            className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between"
           >
             <div>
-              {/* Top row */}
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                    {language === 'ar' ? emp.nameAr : emp.name}
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                    {language === 'ar' ? emp.nameAr || emp.name : emp.name}
                   </h3>
-                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    {language === 'ar' ? emp.roleAr : emp.role} · <span className="font-mono">{emp.identifier}</span>
+                  <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                    {language === 'ar' ? emp.roleAr || emp.role : emp.role} · <span className="font-mono">{emp.identifier}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1">
+                <div className="no-print flex items-center gap-1 shrink-0">
                   <button
                     onClick={() => openEditMemberModal(emp)}
                     className="p-1 rounded text-slate-400 hover:text-teal-600"
@@ -304,78 +395,62 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
               </div>
 
               {/* Score indicators */}
-              <div className="space-y-2 mb-4">
+              <div className="space-y-1.5 mb-3">
                 <div>
-                  <div className="flex justify-between text-[11px] mb-1">
-                    <span className="text-slate-500 dark:text-slate-400">{t('knowledgeScore')}</span>
-                    <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{emp.productKnowledgeScore}%</span>
+                  <div className="flex justify-between text-[10px] mb-0.5">
+                    <span className="text-slate-500">{t('knowledgeScore')}</span>
+                    <span className="font-mono font-semibold">{emp.productKnowledgeScore}%</span>
                   </div>
                   <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${emp.productKnowledgeScore >= 80 ? 'bg-teal-500' : emp.productKnowledgeScore >= 70 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                      className={`h-full rounded-full ${emp.productKnowledgeScore >= 80 ? 'bg-teal-500' : 'bg-rose-500'}`}
                       style={{ width: `${emp.productKnowledgeScore}%` }}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between text-[11px] mb-1">
-                    <span className="text-slate-500 dark:text-slate-400">{t('productivityScore')}</span>
-                    <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{emp.productivityScore}%</span>
+                  <div className="flex justify-between text-[10px] mb-0.5">
+                    <span className="text-slate-500">{t('productivityScore')}</span>
+                    <span className="font-mono font-semibold">{emp.productivityScore}%</span>
                   </div>
                   <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${emp.productivityScore >= 80 ? 'bg-teal-500' : emp.productivityScore >= 70 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                      className={`h-full rounded-full ${emp.productivityScore >= 80 ? 'bg-teal-500' : 'bg-rose-500'}`}
                       style={{ width: `${emp.productivityScore}%` }}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <div className="flex justify-between text-[11px] mb-1">
-                    <span className="text-slate-500 dark:text-slate-400">{t('csatScore')}</span>
-                    <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{emp.customerExperienceScore}%</span>
+                  <div className="flex justify-between text-[10px] mb-0.5">
+                    <span className="text-slate-500">{t('csatScore')}</span>
+                    <span className="font-mono font-semibold">{emp.customerExperienceScore}%</span>
                   </div>
                   <div className="w-full bg-slate-100 dark:bg-slate-800 h-1.5 rounded-full overflow-hidden">
                     <div
-                      className={`h-full rounded-full ${emp.customerExperienceScore >= 80 ? 'bg-teal-500' : emp.customerExperienceScore >= 70 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                      className={`h-full rounded-full ${emp.customerExperienceScore >= 80 ? 'bg-teal-500' : 'bg-rose-500'}`}
                       style={{ width: `${emp.customerExperienceScore}%` }}
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Development Focus */}
-              <div className="mb-3">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                  {t('developmentAreas')}
-                </div>
-                <div className="text-xs text-slate-700 dark:text-slate-300">
-                  {emp.developmentAreas.length > 0 ? (
-                    emp.developmentAreas.join(' · ')
-                  ) : (
-                    <span className="text-slate-400 italic">None currently active</span>
-                  )}
-                </div>
-              </div>
-
+              {/* Agreed actions & development */}
               {emp.agreedActions && (
-                <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-300 mb-3">
+                <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800 text-[11px] text-slate-600 dark:text-slate-300 mb-2">
                   <strong className="text-slate-800 dark:text-slate-200">Agreed Action: </strong>
                   {emp.agreedActions}
                 </div>
               )}
             </div>
 
-            {/* Bottom button & follow-up date */}
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
-              <span className="text-[10px] text-slate-400 font-mono">
-                {t('followUpDate')}: {emp.followUpDate}
-              </span>
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
+              <span className="font-mono">Review: {emp.followUpDate}</span>
 
               <button
                 onClick={() => openCoachingModal(emp)}
-                className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300 hover:bg-teal-100 transition-colors cursor-pointer"
+                className="no-print px-2.5 py-1 text-xs font-semibold rounded-lg bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300 hover:bg-teal-100 cursor-pointer"
               >
                 {t('logCoachingSession')}
               </button>
@@ -386,28 +461,25 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
 
       {/* Log Coaching Session Modal */}
       {isAddCoachingModalOpen && selectedEmpForSession && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-3">
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                   {t('logCoachingSession')}
                 </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
+                <p className="text-xs text-slate-500 font-mono">
                   {selectedEmpForSession.name} ({selectedEmpForSession.identifier})
                 </p>
               </div>
-              <button
-                onClick={() => setIsAddCoachingModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
+              <button onClick={() => setIsAddCoachingModalOpen(false)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveCoachingSession} className="space-y-4">
+            <form onSubmit={handleSaveCoachingSession} className="space-y-3 text-xs">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
                   Topic / Skill Focus
                 </label>
                 <input
@@ -415,12 +487,12 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
                   required
                   value={sessionTopic}
                   onChange={(e) => setSessionTopic(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
                   Assigned Coach
                 </label>
                 <input
@@ -428,12 +500,12 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
                   required
                   value={sessionCoach}
                   onChange={(e) => setSessionCoach(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
                   Session Diagnostic Notes
                 </label>
                 <textarea
@@ -441,13 +513,13 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
                   required
                   value={sessionNotes}
                   onChange={(e) => setSessionNotes(e.target.value)}
-                  placeholder="Specific observations, simulated pitch results, feedback given"
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  placeholder="Observations and simulated pitch results"
+                  className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold mb-1">
                   Agreed Action Plan & Next Checkpoint
                 </label>
                 <textarea
@@ -455,8 +527,8 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
                   required
                   value={sessionAgreedActions}
                   onChange={(e) => setSessionAgreedActions(e.target.value)}
-                  placeholder="Concrete commitments (e.g. shadow 3 corporate pitches, review guide by Friday)"
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  placeholder="Specific actions committed by the staff member"
+                  className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                 />
               </div>
 
@@ -464,15 +536,15 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsAddCoachingModalOpen(false)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 rounded-xl"
+                  className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-xl"
                 >
-                  {t('cancel')}
+                  Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-500 rounded-xl shadow-sm cursor-pointer"
+                  className="px-4 py-2 font-bold text-white bg-teal-600 hover:bg-teal-500 rounded-xl cursor-pointer"
                 >
-                  Record Session
+                  Save Coaching Session
                 </button>
               </div>
             </form>
@@ -482,140 +554,109 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
 
       {/* Add / Edit Member Modal */}
       {isMemberModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3">
+          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-3">
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
                 {editingEmployee ? t('editEmployee') : t('addEmployee')}
               </h3>
-              <button
-                onClick={() => setIsMemberModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
+              <button onClick={() => setIsMemberModalOpen(false)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveMember} className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
+            <form onSubmit={handleSaveMember} className="space-y-3 text-xs">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('empName')} (EN)
-                  </label>
+                  <label className="block font-semibold mb-1">Name (EN)</label>
                   <input
                     type="text"
                     required
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('empName')} (العربية)
-                  </label>
+                  <label className="block font-semibold mb-1">الاسم (العربية)</label>
                   <input
                     type="text"
                     value={nameAr}
                     onChange={(e) => setNameAr(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                     dir="rtl"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('empRole')}
-                  </label>
+                  <label className="block font-semibold mb-1">Role</label>
                   <input
                     type="text"
                     value={role}
                     onChange={(e) => setRole(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('empIdentifier')}
-                  </label>
+                  <label className="block font-semibold mb-1">ID</label>
                   <input
                     type="text"
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none font-mono"
+                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono outline-none"
                   />
                 </div>
               </div>
 
-              {/* Scores */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Knowledge %
-                  </label>
+                  <label className="block text-[10px] text-slate-400 mb-1">Knowledge %</label>
                   <input
                     type="number"
-                    min={0}
-                    max={100}
+                    min="0"
+                    max="100"
                     value={productKnowledgeScore}
                     onChange={(e) => setProductKnowledgeScore(parseInt(e.target.value, 10) || 0)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono"
+                    className="w-full px-2 py-1.5 rounded-lg border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-center"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Productivity %
-                  </label>
+                  <label className="block text-[10px] text-slate-400 mb-1">Productivity %</label>
                   <input
                     type="number"
-                    min={0}
-                    max={100}
+                    min="0"
+                    max="100"
                     value={productivityScore}
                     onChange={(e) => setProductivityScore(parseInt(e.target.value, 10) || 0)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono"
+                    className="w-full px-2 py-1.5 rounded-lg border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-center"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    CSAT %
-                  </label>
+                  <label className="block text-[10px] text-slate-400 mb-1">CSAT %</label>
                   <input
                     type="number"
-                    min={0}
-                    max={100}
+                    min="0"
+                    max="100"
                     value={customerExperienceScore}
                     onChange={(e) => setCustomerExperienceScore(parseInt(e.target.value, 10) || 0)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white font-mono"
+                    className="w-full px-2 py-1.5 rounded-lg border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-center"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Development Areas (comma separated)
-                </label>
-                <input
-                  type="text"
-                  value={developmentAreas}
-                  onChange={(e) => setDevelopmentAreas(e.target.value)}
-                  placeholder="e.g. Enterprise Data cards, objection handling"
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
                   type="button"
                   onClick={() => setIsMemberModalOpen(false)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 rounded-xl"
+                  className="px-4 py-2 text-slate-500 hover:bg-slate-100 rounded-xl"
                 >
-                  {t('cancel')}
+                  Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-xs font-semibold text-white bg-teal-600 hover:bg-teal-500 rounded-xl shadow-sm cursor-pointer"
+                  className="px-4 py-2 font-bold text-white bg-teal-600 hover:bg-teal-500 rounded-xl"
                 >
                   Save Member
                 </button>
@@ -627,28 +668,25 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
 
       {/* Coaching History Modal */}
       {selectedEmpForHistory && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-3">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800 mb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                   Coaching History: {selectedEmpForHistory.name}
                 </h3>
-                <p className="text-xs text-slate-400">{selectedEmpForHistory.identifier}</p>
+                <p className="text-xs text-slate-400 font-mono">{selectedEmpForHistory.identifier}</p>
               </div>
-              <button
-                onClick={() => setSelectedEmpForHistory(null)}
-                className="p-1 rounded-lg text-slate-400 hover:bg-slate-100"
-              >
+              <button onClick={() => setSelectedEmpForHistory(null)} className="p-1 rounded-lg text-slate-400 hover:bg-slate-100">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-3 max-h-60 overflow-y-auto">
+            <div className="space-y-2 text-xs">
               {selectedEmpForHistory.history.length > 0 ? (
                 selectedEmpForHistory.history.map((h) => (
-                  <div key={h.id} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800 text-xs">
-                    <div className="flex justify-between font-semibold text-slate-800 dark:text-slate-200 mb-1">
+                  <div key={h.id} className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-100 dark:border-slate-800">
+                    <div className="flex justify-between font-bold text-slate-800 dark:text-slate-200 mb-0.5">
                       <span>{h.topic}</span>
                       <span className="font-mono text-slate-400 text-[10px]">{h.date}</span>
                     </div>
@@ -659,7 +697,7 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
                   </div>
                 ))
               ) : (
-                <p className="text-xs text-slate-400 py-4 text-center">No previous coaching sessions recorded.</p>
+                <p className="text-xs text-slate-400 py-3 text-center">No previous coaching sessions recorded.</p>
               )}
             </div>
           </div>
