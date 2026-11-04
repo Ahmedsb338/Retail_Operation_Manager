@@ -30,6 +30,7 @@ export interface DailyTnpsRecord {
   dailyTnpsPercent: number;
   requiredPromoters: number;
   dailyRequired: number;
+  targetBenchmark: number;
   updatedAt: string;
   updatedBy: string;
   revisionNumber: number;
@@ -52,11 +53,35 @@ export interface MonthlyTnpsSummary {
   targetPercent: number;
 }
 
-export const TNPS_TARGET_PERCENT = 70;
+export const DEFAULT_TNPS_BENCHMARK = 70;
+
+/**
+ * Calculates required promoters for ANY arbitrary benchmark B in (0, 100).
+ * Derivation:
+ * (P + X - D) / (T + X) = B / 100
+ * Setting b = B / 100:
+ * P + X - D = b * (P + N + D + X)
+ * X * (1 - b) = (1 + b) * D + b * N - (1 - b) * P
+ * X = [ (1 + b)*D + b*N ] / (1 - b) - P
+ */
+export const calculateRequiredPromotersForBenchmark = (
+  detractors: number,
+  passive: number,
+  promoters: number,
+  benchmarkPercent: number = 70
+): number => {
+  if (detractors === 0 && passive === 0 && promoters === 0) return 0;
+  const b = Math.max(1, Math.min(99, benchmarkPercent)) / 100;
+  const numerator = ((1 + b) * detractors) + (b * passive);
+  const denominator = 1 - b;
+  const rawReq = (numerator / denominator) - promoters;
+  return Math.max(0, Math.round(rawReq));
+};
 
 export const computeSingleAgentTnps = (
   row: TnpsAgentRow,
-  remainingShifts: number
+  remainingShifts: number,
+  benchmarkPercent: number = 70
 ): ComputedTnpsRow => {
   const detractors = Math.max(0, parseFloat(String(row.detractors)) || 0);
   const passive = Math.max(0, parseFloat(String(row.passive)) || 0);
@@ -68,11 +93,12 @@ export const computeSingleAgentTnps = (
     tnpsPercent = ((promoters - detractors) / total) * 100;
   }
 
-  let requiredPromoters = 0;
-  if (detractors > 0 || passive > 0 || promoters > 0) {
-    const rawReq = (((1.7 * detractors) + (0.7 * passive)) / 0.3) - promoters;
-    requiredPromoters = Math.max(0, Math.round(rawReq));
-  }
+  const requiredPromoters = calculateRequiredPromotersForBenchmark(
+    detractors,
+    passive,
+    promoters,
+    benchmarkPercent
+  );
 
   let daily = 0;
   if (remainingShifts > 0 && requiredPromoters > 0) {
@@ -94,7 +120,8 @@ export const computeSingleAgentTnps = (
 
 export const aggregateDailyTotalTnps = (
   computedRows: ComputedTnpsRow[],
-  remainingShifts: number
+  remainingShifts: number,
+  benchmarkPercent: number = 70
 ) => {
   const detractors = computedRows.reduce((sum, r) => sum + r.detractors, 0);
   const passive = computedRows.reduce((sum, r) => sum + r.passive, 0);
@@ -106,11 +133,12 @@ export const aggregateDailyTotalTnps = (
     tnpsPercent = ((promoters - detractors) / total) * 100;
   }
 
-  let requiredPromoters = 0;
-  if (detractors > 0 || passive > 0 || promoters > 0) {
-    const rawReq = (((1.7 * detractors) + (0.7 * passive)) / 0.3) - promoters;
-    requiredPromoters = Math.max(0, Math.round(rawReq));
-  }
+  const requiredPromoters = calculateRequiredPromotersForBenchmark(
+    detractors,
+    passive,
+    promoters,
+    benchmarkPercent
+  );
 
   let dailyRequired = 0;
   if (remainingShifts > 0 && requiredPromoters > 0) {
@@ -130,7 +158,8 @@ export const aggregateDailyTotalTnps = (
 
 export const aggregateMonthlyRecords = (
   records: DailyTnpsRecord[],
-  expectedWorkingDays: number = 25
+  expectedWorkingDays: number = 25,
+  benchmarkPercent: number = 70
 ): MonthlyTnpsSummary => {
   if (!records || records.length === 0) {
     return {
@@ -147,11 +176,13 @@ export const aggregateMonthlyRecords = (
       weakestDay: null,
       dayOverDayVariance: 0,
       isTargetMet: false,
-      targetPercent: TNPS_TARGET_PERCENT,
+      targetPercent: benchmarkPercent,
     };
   }
 
-  const sorted = [...records].sort((a, b) => new Date(a.businessDate).getTime() - new Date(b.businessDate).getTime());
+  const sorted = [...records].sort(
+    (a, b) => new Date(a.businessDate).getTime() - new Date(b.businessDate).getTime()
+  );
 
   let totalDetractors = 0;
   let totalPassive = 0;
@@ -178,7 +209,6 @@ export const aggregateMonthlyRecords = (
     cumulativeTnpsPercent = ((totalPromoters - totalDetractors) / cumulativeTotal) * 100;
   }
 
-  // Day-over-Day variance between last two recorded days
   let dayOverDayVariance = 0;
   if (sorted.length >= 2) {
     const last = sorted[sorted.length - 1].dailyTnpsPercent;
@@ -186,7 +216,10 @@ export const aggregateMonthlyRecords = (
     dayOverDayVariance = Math.round(last - prev);
   }
 
-  const completenessPercent = Math.min(100, Math.round((records.length / Math.max(1, expectedWorkingDays)) * 100));
+  const completenessPercent = Math.min(
+    100,
+    Math.round((records.length / Math.max(1, expectedWorkingDays)) * 100)
+  );
 
   return {
     month: sorted[0]?.businessDate?.slice(0, 7) || '2026-11',
@@ -201,7 +234,7 @@ export const aggregateMonthlyRecords = (
     bestDay,
     weakestDay,
     dayOverDayVariance,
-    isTargetMet: cumulativeTnpsPercent >= TNPS_TARGET_PERCENT,
-    targetPercent: TNPS_TARGET_PERCENT,
+    isTargetMet: cumulativeTnpsPercent >= benchmarkPercent,
+    targetPercent: benchmarkPercent,
   };
 };

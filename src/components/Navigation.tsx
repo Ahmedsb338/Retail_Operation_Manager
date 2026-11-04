@@ -22,12 +22,14 @@ import {
   Plus,
   Calculator,
   Target,
+  UserCheck,
 } from 'lucide-react';
 
 export type NavTab =
   | 'dashboard'
   | 'target_calc'
   | 'tnps_calc'
+  | 'staff'
   | 'operations'
   | 'team'
   | 'sales'
@@ -75,12 +77,17 @@ export const Navigation: React.FC<NavigationProps> = ({ activeTab, setActiveTab,
       icon: HeartHandshake,
     },
     {
+      id: 'staff',
+      label: language === 'ar' ? 'سجل فريق العمل والموظفين' : 'Staff & Team Roster',
+      icon: Users,
+    },
+    {
       id: 'operations',
       label: t('navOperations'),
       icon: CheckSquare,
       badge: overdueTasksCount + blockedTasksCount > 0 ? overdueTasksCount + blockedTasksCount : undefined,
     },
-    { id: 'team', label: t('navTeam'), icon: Users },
+    { id: 'team', label: t('navTeam'), icon: UserCheck },
     { id: 'sales', label: t('navSales'), icon: TrendingUp },
     { id: 'customer', label: t('navCustomer'), icon: Activity },
     { id: 'health', label: t('navHealth'), icon: Calculator },

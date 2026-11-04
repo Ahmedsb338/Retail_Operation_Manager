@@ -127,8 +127,8 @@ export const AccessPage: React.FC = () => {
         </p>
       </div>
 
-      <div className="w-full text-center text-xs text-slate-400 z-10 font-medium py-2">
-        تم تطويره بواسطة Ahmed Sobhy ©2026
+      <div className="w-full text-center text-xs text-slate-400 z-10 font-medium py-2 font-sans">
+        developed by Ahmed Sobhy ©2026
       </div>
     </div>
   );
