@@ -1,0 +1,15 @@
+[
+  {
+    "code": "1750",
+    "name": "Abo ElMatamer Mahkama St. Express Store",
+    "nameAr": "فرع أبو المطامير - شارع المحكمة إكسبريس",
+    "city": "El Beheira",
+    "cityAr": "البحيرة",
+    "manager": "Store Manager",
+    "managerAr": "مدير الفرع",
+    "businessDate": "2026-11-03",
+    "totalShifts": 25,
+    "remainingShifts": 10,
+    "targetDailyRevenue": 150000
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "name": "Operation Manager for Retail",
+  "description": "Mobile-first retail operations management platform for branch managers to track daily operations, team coaching, sales boxes, customer experience, and branch health.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
