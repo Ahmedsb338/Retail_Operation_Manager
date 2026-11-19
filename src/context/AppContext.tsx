@@ -1,9 +1,23 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  ReactNode,
+} from 'react';
 import {
+  AIAnalysisResult,
+  AuthUser,
+  AuthorizedBranchSummary,
   Branch,
-  BranchDataStore,
+  CoachingHistoryItem,
   CustomerCase,
+  DashboardPayload,
+  DateRangeFilter,
   Employee,
+  FiscalYearConfig,
   HealthCategoryScore,
   HealthWeights,
   Language,
@@ -11,30 +25,78 @@ import {
   Task,
   TaskStatus,
   Theme,
-  AIAnalysisResult,
-  AIActionPlanItem,
-  CoachingHistoryItem,
+  UnconfiguredBranchItem,
 } from '../types';
-import { DEMO_BRANCHES, DEFAULT_HEALTH_WEIGHTS, getInitialBranchData } from '../data/seedData';
 import { translations, TranslationKey } from '../i18n/translations';
+import {
+  ApiError,
+  apiRequest,
+  buildQueryParams,
+  onUnauthorizedResponse,
+} from '../services/apiClient';
+
+const DEFAULT_HEALTH_WEIGHTS: HealthWeights = {
+  dailyOperations: 25,
+  salesPerformance: 25,
+  teamPerformance: 20,
+  customerExperience: 15,
+  complianceAudits: 15,
+};
 
 interface AppContextType {
-  // Localization & Theme
+  // Localization & Theme (UI preferences only)
   language: Language;
   setLanguage: (lang: Language) => void;
   theme: Theme;
   setTheme: (theme: Theme) => void;
   t: (key: TranslationKey) => string;
 
-  // Authentication & Branch
-  currentBranch: Branch | null;
-  isAuthenticated: boolean;
-  loginWithBranchCode: (code: string) => { success: boolean; message?: string };
-  logout: () => void;
-  availableBranches: Branch[];
-  switchBranchCode: (code: string) => void;
+  // Infrastructure Status
+  authLoading: boolean;
+  dataLoading: boolean;
+  databaseUnavailable: boolean;
+  databaseErrorMessage: string;
+  missingDbVars: string[];
+  geminiConfigured: boolean;
+  refreshHealth: () => Promise<void>;
 
-  // Active Branch Data
+  // Authentication & Scope
+  user: AuthUser | null;
+  isAuthenticated: boolean;
+  canEdit: boolean;
+  configuredBranches: Array<{
+    code: string;
+    name: string;
+    nameAr: string;
+    city: string;
+    cityAr: string;
+    area: string;
+  }>;
+  unconfiguredBranches: UnconfiguredBranchItem[];
+  authorizedBranches: AuthorizedBranchSummary[];
+  selectedBranchCode: string;
+  setSelectedBranchCode: (code: string) => void;
+  currentBranch: Branch | null;
+  dateRange: DateRangeFilter;
+  setDateRange: (range: DateRangeFilter) => void;
+  fiscalYear: FiscalYearConfig;
+  refreshWorkspaceData: () => Promise<void>;
+  reloadBranchesCatalog: () => Promise<void>;
+
+  loginBranch: (params: {
+    branchName: string;
+    branchCode: string;
+    accessCode: string;
+  }) => Promise<{ success: boolean; message?: string; retryAfterSeconds?: number }>;
+  loginArea: (params: {
+    username: string;
+    password: string;
+  }) => Promise<{ success: boolean; message?: string; retryAfterSeconds?: number }>;
+  logout: () => Promise<void>;
+  logoutAll: () => Promise<void>;
+
+  // Shared Domain Data
+  dashboardData: DashboardPayload | null;
   tasks: Task[];
   employees: Employee[];
   salesBoxes: SalesBox[];
@@ -42,15 +104,22 @@ interface AppContextType {
   healthWeights: HealthWeights;
   aiAnalysis: AIAnalysisResult | null;
   isAiLoading: boolean;
+  aiError: string | null;
 
-  // Calculated Metrics
+  // Computed Metrics
   opsCompletionPercentage: number;
   totalTasksCount: number;
   completedTasksCount: number;
   pendingTasksCount: number;
   overdueTasksCount: number;
   blockedTasksCount: number;
-  criticalAlerts: Array<{ id: string; title: string; titleAr: string; type: 'task' | 'case' | 'sales'; severity: 'critical' | 'high' }>;
+  criticalAlerts: Array<{
+    id: string;
+    title: string;
+    titleAr: string;
+    type: 'task' | 'case' | 'sales';
+    severity: 'critical' | 'high';
+  }>;
   overallHealthScore: number;
   healthCategories: HealthCategoryScore[];
   weakestHealthArea: HealthCategoryScore | null;
@@ -60,74 +129,214 @@ interface AppContextType {
   pendingCasesCount: number;
   repeatedCasesCount: number;
 
-  // Operations CRUD
-  addTask: (task: Omit<Task, 'id' | 'branchCode' | 'createdAt' | 'updatedAt' | 'history'>) => void;
-  updateTask: (task: Task) => void;
-  deleteTask: (taskId: string) => void;
-  updateTaskStatus: (taskId: string, status: TaskStatus) => void;
+  // Operations CRUD (Store Manager only)
+  addTask: (
+    task: Omit<Task, 'id' | 'branchCode' | 'createdAt' | 'updatedAt' | 'history'>
+  ) => Promise<void>;
+  updateTask: (task: Task) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<void>;
+  updateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
 
-  // Team & Coaching CRUD
-  addEmployee: (emp: Omit<Employee, 'id' | 'branchCode' | 'history'>) => void;
-  updateEmployee: (emp: Employee) => void;
-  addCoachingSession: (employeeId: string, session: Omit<CoachingHistoryItem, 'id'>) => void;
+  // Staff & Coaching CRUD (Store Manager only)
+  addEmployee: (emp: Omit<Employee, 'id' | 'branchCode' | 'history'>) => Promise<void>;
+  updateEmployee: (emp: Employee) => Promise<void>;
+  deleteEmployee: (empId: string) => Promise<void>;
+  addCoachingSession: (
+    employeeId: string,
+    session: Omit<CoachingHistoryItem, 'id'>
+  ) => Promise<void>;
 
-  // Sales CRUD
-  addSalesBox: (box: Omit<SalesBox, 'id' | 'branchCode' | 'dailyHistory'>) => void;
-  updateSalesBox: (box: SalesBox) => void;
+  // Sales Boxes CRUD (Store Manager only)
+  addSalesBox: (
+    box: Omit<SalesBox, 'id' | 'branchCode' | 'dailyHistory'>
+  ) => Promise<void>;
+  updateSalesBox: (box: SalesBox) => Promise<void>;
+  deleteSalesBox: (boxId: string) => Promise<void>;
 
-  // Cases CRUD
-  addCase: (caseItem: Omit<CustomerCase, 'id' | 'branchCode' | 'createdAt' | 'updatedAt'>) => void;
-  updateCase: (caseItem: CustomerCase) => void;
+  // Complaints CRUD (Store Manager only)
+  addCase: (
+    caseItem: Omit<CustomerCase, 'id' | 'branchCode' | 'createdAt' | 'updatedAt'>
+  ) => Promise<void>;
+  updateCase: (caseItem: CustomerCase) => Promise<void>;
+  deleteCase: (caseId: string) => Promise<void>;
 
   // Health Weights
-  updateHealthWeights: (weights: HealthWeights) => void;
-  resetHealthWeights: () => void;
+  updateHealthWeights: (weights: HealthWeights) => Promise<void>;
+  resetHealthWeights: () => Promise<void>;
+
+  // Settings
+  saveFiscalYear: (payload: FiscalYearConfig) => Promise<void>;
+  updateBranchProfile: (payload: {
+    managerName?: string;
+    managerNameAr?: string;
+    businessDate?: string;
+    targetDailyRevenue?: number;
+  }) => Promise<void>;
 
   // AI Analytics
   runAiDiagnostic: () => Promise<void>;
   toggleActionPlanItem: (itemId: string) => void;
-
-  // Reset
-  resetBranchToDemo: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const STORAGE_KEYS = {
-  LANG: 'opm_language',
-  THEME: 'opm_theme',
-  BRANCH_CODE: 'opm_active_branch_code',
-  DATA_PREFIX: 'opm_branch_data_',
+const UI_PREF_KEYS = {
+  LANG: 'asb_ui_language',
+  THEME: 'asb_ui_theme',
 };
 
+function toFrontendTask(raw: any): Task {
+  return {
+    id: String(raw.id),
+    branchCode: String(raw.branchCode || ''),
+    agentName: String(raw.agentName || ''),
+    date: String(raw.date || ''),
+    title: String(raw.title || ''),
+    titleAr: String(raw.titleAr || raw.title || ''),
+    description: String(raw.description || ''),
+    descriptionAr: String(raw.descriptionAr || ''),
+    category: (raw.category || 'store') as Task['category'],
+    subcategory: String(raw.subcategory || ''),
+    owner: String(raw.owner || ''),
+    ownerRole: String(raw.ownerRole || ''),
+    createdAt: String(raw.createdAt || raw.date || new Date().toISOString()),
+    deadline: String(raw.dueDate || raw.date || ''),
+    dueDate: String(raw.dueDate || ''),
+    priority: (raw.priority || 'medium') as Task['priority'],
+    status: (raw.status || 'not_started') as Task['status'],
+    notes: String(raw.notes || ''),
+    evidenceText: String(raw.evidenceText || ''),
+    completedAt: raw.completedAt ? String(raw.completedAt) : undefined,
+    updatedAt: String(raw.updatedAt || raw.createdAt || new Date().toISOString()),
+    history: Array.isArray(raw.historyJson) ? raw.historyJson : [],
+  };
+}
+
+function toFrontendEmployee(raw: any): Employee {
+  return {
+    id: String(raw.id),
+    branchCode: String(raw.branchCode || ''),
+    name: String(raw.name || ''),
+    nameAr: String(raw.nameAr || raw.name || ''),
+    identifier: String(raw.sid || ''),
+    sid: String(raw.sid || ''),
+    role: String(raw.roleTitle || ''),
+    roleTitle: String(raw.roleTitle || ''),
+    roleAr: String(raw.roleTitleAr || raw.roleTitle || ''),
+    roleTitleAr: String(raw.roleTitleAr || ''),
+    productKnowledgeScore:
+      raw.productKnowledgeScore === null || raw.productKnowledgeScore === undefined
+        ? null
+        : Number(raw.productKnowledgeScore),
+    productivityScore:
+      raw.productivityScore === null || raw.productivityScore === undefined
+        ? null
+        : Number(raw.productivityScore),
+    customerExperienceScore:
+      raw.customerExperienceScore === null || raw.customerExperienceScore === undefined
+        ? null
+        : Number(raw.customerExperienceScore),
+    coachingStatus: (raw.coachingStatus || 'needs_coaching') as Employee['coachingStatus'],
+    developmentAreas: Array.isArray(raw.developmentAreas) ? raw.developmentAreas : [],
+    coachingNotes: String(raw.coachingNotes || ''),
+    agreedActions: String(raw.agreedActions || ''),
+    assignedCoach: String(raw.assignedCoach || ''),
+    followUpDate: String(raw.followUpDate || ''),
+    progressStatus: (raw.progressStatus || 'pending') as Employee['progressStatus'],
+    isActive: raw.isActive !== false,
+    history: Array.isArray(raw.history) ? raw.history : [],
+  };
+}
+
+function toFrontendCase(raw: any): CustomerCase {
+  return {
+    id: String(raw.id),
+    branchCode: String(raw.branchCode || ''),
+    caseNumber: String(raw.caseNumber || ''),
+    customerIdentifier: String(raw.customerIdentifier || ''),
+    agentName: String(raw.agentName || ''),
+    date: String(raw.date || ''),
+    issueCategory: String(raw.category || ''),
+    issueCategoryAr: String(raw.categoryAr || raw.category || ''),
+    category: String(raw.category || ''),
+    categoryAr: String(raw.categoryAr || ''),
+    description: String(raw.description || ''),
+    isRepeated: Boolean(raw.isRepeated),
+    repeatedMatchCriteria: String(raw.repeatedMatchCriteria || ''),
+    rootCause: String(raw.rootCause || ''),
+    rootCauseAr: String(raw.rootCauseAr || raw.rootCause || ''),
+    assignedOwner: String(raw.assignedOwner || ''),
+    createdAt: String(raw.createdAt || raw.date || new Date().toISOString()),
+    updatedAt: String(raw.updatedAt || raw.createdAt || new Date().toISOString()),
+    resolutionDeadline: String(raw.resolutionDeadline || ''),
+    status: (raw.status || 'pending') as CustomerCase['status'],
+    correctiveAction: String(raw.correctiveAction || ''),
+    resolutionNotes: String(raw.notes || ''),
+    notes: String(raw.notes || ''),
+  };
+}
+
+function toFrontendSalesBox(raw: any): SalesBox {
+  return {
+    id: String(raw.id),
+    branchCode: String(raw.branchCode || ''),
+    boxKey: String(raw.boxKey || ''),
+    name: String(raw.name || ''),
+    nameAr: String(raw.nameAr || raw.name || ''),
+    target: Number(raw.target || 0),
+    actual: Number(raw.actual || 0),
+    unit: String(raw.unit || ''),
+    unitAr: String(raw.unitAr || raw.unit || ''),
+    remainingWorkingDays: Number(raw.remainingWorkingDays || 0),
+    trend: (raw.trend || 'stable') as SalesBox['trend'],
+    dailyHistory: Array.isArray(raw.dailyHistoryJson) ? raw.dailyHistoryJson : [],
+  };
+}
+
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // 1. Language state
+  // 1. UI Language & Theme
   const [language, setLanguageState] = useState<Language>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.LANG);
-    return saved === 'ar' || saved === 'en' ? saved : 'en';
+    try {
+      const saved = localStorage.getItem(UI_PREF_KEYS.LANG);
+      return saved === 'ar' || saved === 'en' ? saved : 'en';
+    } catch {
+      return 'en';
+    }
   });
 
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem(STORAGE_KEYS.LANG, lang);
+    try {
+      localStorage.setItem(UI_PREF_KEYS.LANG, lang);
+    } catch {
+      // ignore storage errors
+    }
   };
 
-  // Sync HTML attributes for RTL/LTR
   useEffect(() => {
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
   }, [language]);
 
-  // 2. Theme state
   const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.THEME);
-    if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    try {
+      const saved = localStorage.getItem(UI_PREF_KEYS.THEME);
+      if (saved === 'dark' || saved === 'light') return saved;
+    } catch {
+      // ignore
+    }
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light';
   });
 
-  const setTheme = (t: Theme) => {
-    setThemeState(t);
-    localStorage.setItem(STORAGE_KEYS.THEME, t);
+  const setTheme = (nextTheme: Theme) => {
+    setThemeState(nextTheme);
+    try {
+      localStorage.setItem(UI_PREF_KEYS.THEME, nextTheme);
+    } catch {
+      // ignore
+    }
   };
 
   useEffect(() => {
@@ -138,91 +347,370 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, [theme]);
 
-  // Translation helper
-  const t = (key: TranslationKey): string => {
-    const dict = translations[language];
-    return dict[key] || translations.en[key] || (key as string);
-  };
+  const t = useCallback(
+    (key: TranslationKey): string => {
+      return translations[language][key] || translations.en[key] || String(key);
+    },
+    [language]
+  );
 
-  // 3. Branch authentication
-  const [currentBranchCode, setCurrentBranchCode] = useState<string | null>(() => {
-    return localStorage.getItem(STORAGE_KEYS.BRANCH_CODE) || null;
+  // 2. Backend availability & auth session
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [dataLoading, setDataLoading] = useState<boolean>(false);
+  const [databaseUnavailable, setDatabaseUnavailable] = useState<boolean>(false);
+  const [databaseErrorMessage, setDatabaseErrorMessage] = useState<string>('');
+  const [missingDbVars, setMissingDbVars] = useState<string[]>([]);
+  const [geminiConfigured, setGeminiConfigured] = useState<boolean>(false);
+
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [configuredBranches, setConfiguredBranches] = useState<
+    Array<{
+      code: string;
+      name: string;
+      nameAr: string;
+      city: string;
+      cityAr: string;
+      area: string;
+    }>
+  >([]);
+  const [unconfiguredBranches, setUnconfiguredBranches] = useState<UnconfiguredBranchItem[]>([]);
+  const [selectedBranchCode, setSelectedBranchCodeState] = useState<string>('');
+  const [dateRange, setDateRange] = useState<DateRangeFilter>({ fromDate: '', toDate: '' });
+  const [fiscalYear, setFiscalYear] = useState<FiscalYearConfig>({
+    startDate: '2026-04-01',
+    endDate: '2027-03-31',
+    pillarTargets: [],
   });
 
-  const currentBranch = useMemo(() => {
-    if (!currentBranchCode) return null;
-    return DEMO_BRANCHES.find((b) => b.code.toUpperCase() === currentBranchCode.toUpperCase()) || null;
-  }, [currentBranchCode]);
+  // 3. Domain stores loaded from PostgreSQL API
+  const [dashboardData, setDashboardData] = useState<DashboardPayload | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [salesBoxes, setSalesBoxes] = useState<SalesBox[]>([]);
+  const [cases, setCases] = useState<CustomerCase[]>([]);
+  const [healthWeights, setHealthWeights] = useState<HealthWeights>(DEFAULT_HEALTH_WEIGHTS);
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
+  const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
-  const isAuthenticated = Boolean(currentBranch);
-
-  const loginWithBranchCode = (inputCode: string) => {
-    const clean = inputCode.trim().toUpperCase();
-    const found = DEMO_BRANCHES.find((b) => b.code.toUpperCase() === clean);
-    if (found) {
-      setCurrentBranchCode(found.code);
-      localStorage.setItem(STORAGE_KEYS.BRANCH_CODE, found.code);
-      return { success: true };
+  const handleDbError = useCallback((err: unknown): boolean => {
+    if (err instanceof ApiError && (err.status === 503 || err.code === 'DATABASE_UNAVAILABLE')) {
+      setDatabaseUnavailable(true);
+      setDatabaseErrorMessage(err.message);
+      if (err.missingVariables) setMissingDbVars(err.missingVariables);
+      return true;
     }
-    return { success: false, message: 'Invalid branch code' };
-  };
+    return false;
+  }, []);
 
-  const logout = () => {
-    setCurrentBranchCode(null);
-    localStorage.removeItem(STORAGE_KEYS.BRANCH_CODE);
-  };
-
-  const switchBranchCode = (code: string) => {
-    const found = DEMO_BRANCHES.find((b) => b.code.toUpperCase() === code.trim().toUpperCase());
-    if (found) {
-      setCurrentBranchCode(found.code);
-      localStorage.setItem(STORAGE_KEYS.BRANCH_CODE, found.code);
+  const reloadBranchesCatalog = useCallback(async () => {
+    try {
+      const data = await apiRequest<{
+        configuredBranches: typeof configuredBranches;
+        unconfiguredBranches: UnconfiguredBranchItem[];
+      }>('/api/v1/auth/branches', { skipAuthRedirect: true });
+      setConfiguredBranches(data.configuredBranches || []);
+      setUnconfiguredBranches(data.unconfiguredBranches || []);
+      setDatabaseUnavailable(false);
+    } catch (err) {
+      handleDbError(err);
     }
-  };
+  }, [handleDbError]);
 
-  // 4. Branch Data Store per branch
-  const [branchData, setBranchData] = useState<BranchDataStore>(() => {
-    const initialCode = currentBranchCode || 'BR-101';
-    const local = localStorage.getItem(STORAGE_KEYS.DATA_PREFIX + initialCode);
-    if (local) {
-      try {
-        return JSON.parse(local);
-      } catch (e) {
-        console.error('Error parsing stored branch data', e);
+  const refreshHealth = useCallback(async () => {
+    try {
+      const health = await apiRequest<{
+        databaseConfigured: boolean;
+        geminiConfigured: boolean;
+      }>('/api/v1/health', { skipAuthRedirect: true });
+      setGeminiConfigured(Boolean(health.geminiConfigured));
+      if (!health.databaseConfigured) {
+        setDatabaseUnavailable(true);
+      } else {
+        setDatabaseUnavailable(false);
+        setDatabaseErrorMessage('');
+        setMissingDbVars([]);
       }
+    } catch {
+      // ignore
     }
-    return getInitialBranchData(initialCode);
-  });
+  }, []);
 
-  // Whenever active branch changes, reload data for that branch
+  // Register 401 listener so expired/revoked cookies immediately transition cleanly to AccessPage
   useEffect(() => {
-    if (!currentBranchCode) return;
-    const local = localStorage.getItem(STORAGE_KEYS.DATA_PREFIX + currentBranchCode);
-    if (local) {
+    onUnauthorizedResponse(() => {
+      setUser(null);
+      setDashboardData(null);
+      setTasks([]);
+      setEmployees([]);
+      setSalesBoxes([]);
+      setCases([]);
+    });
+    return () => onUnauthorizedResponse(null);
+  }, []);
+
+  // Initial session hydration
+  useEffect(() => {
+    let active = true;
+    async function bootstrap() {
+      setAuthLoading(true);
       try {
-        setBranchData(JSON.parse(local));
-        return;
-      } catch (e) {
-        console.error('Error reading branch cache', e);
+        const health = await apiRequest<{
+          databaseConfigured: boolean;
+          geminiConfigured: boolean;
+        }>('/api/v1/health', { skipAuthRedirect: true });
+        if (!active) return;
+        setGeminiConfigured(Boolean(health.geminiConfigured));
+        if (!health.databaseConfigured) {
+          setDatabaseUnavailable(true);
+          setAuthLoading(false);
+          return;
+        }
+        await reloadBranchesCatalog();
+        try {
+          const me = await apiRequest<{ user: AuthUser }>('/api/v1/auth/me', {
+            skipAuthRedirect: true,
+          });
+          if (!active) return;
+          setUser(me.user);
+          if (me.user.role === 'STORE_MANAGER' && me.user.branchCode) {
+            setSelectedBranchCodeState(me.user.branchCode);
+          } else {
+            setSelectedBranchCodeState('');
+          }
+        } catch {
+          if (active) setUser(null);
+        }
+      } catch (err) {
+        handleDbError(err);
+      } finally {
+        if (active) setAuthLoading(false);
       }
     }
-    const fresh = getInitialBranchData(currentBranchCode);
-    setBranchData(fresh);
-    localStorage.setItem(STORAGE_KEYS.DATA_PREFIX + currentBranchCode, JSON.stringify(fresh));
-  }, [currentBranchCode]);
+    bootstrap();
+    return () => {
+      active = false;
+    };
+  }, [handleDbError, reloadBranchesCatalog]);
 
-  // Persist branchData on changes
-  const saveBranchData = (updated: BranchDataStore) => {
-    setBranchData(updated);
-    if (currentBranchCode) {
-      localStorage.setItem(STORAGE_KEYS.DATA_PREFIX + currentBranchCode, JSON.stringify(updated));
+  const isAuthenticated = Boolean(user);
+  const canEdit = user?.role === 'STORE_MANAGER';
+  const authorizedBranches = user?.authorizedBranches || [];
+
+  const setSelectedBranchCode = useCallback(
+    (code: string) => {
+      if (!user) return;
+      if (user.role === 'STORE_MANAGER') {
+        setSelectedBranchCodeState(user.branchCode || '');
+        return;
+      }
+      setSelectedBranchCodeState(code);
+    },
+    [user]
+  );
+
+  // Active branch for display / single-branch views (Target Calc, TNPS Calc, AI, Health)
+  const currentBranch: Branch | null = useMemo(() => {
+    if (!user) return null;
+    const targetCode =
+      user.role === 'STORE_MANAGER'
+        ? user.branchCode
+        : selectedBranchCode || user.authorizedBranches[0]?.code || null;
+    if (!targetCode) return null;
+    const found = user.authorizedBranches.find((b) => b.code === targetCode);
+    if (!found) return null;
+    return {
+      code: found.code,
+      storeId: found.storeId,
+      name: found.name,
+      nameAr: found.nameAr || found.name,
+      city: found.city,
+      cityAr: found.cityAr || found.city,
+      area: found.area,
+      manager: found.managerName || 'Store Manager',
+      managerAr: found.managerNameAr || found.managerName || 'مدير الفرع',
+      businessDate: found.businessDate || new Date().toISOString().slice(0, 10),
+      totalShifts: found.totalShifts,
+      remainingShifts: found.remainingShifts,
+      targetDailyRevenue: found.targetDailyRevenue,
+    };
+  }, [user, selectedBranchCode]);
+
+  const scopeQuery = useMemo(() => {
+    const branchParam =
+      user?.role === 'AREA_MANAGER' ? selectedBranchCode || undefined : user?.branchCode || undefined;
+    return buildQueryParams({
+      branchCode: branchParam,
+      fromDate: dateRange.fromDate || undefined,
+      toDate: dateRange.toDate || undefined,
+    });
+  }, [user, selectedBranchCode, dateRange]);
+
+  const singleBranchQuery = useMemo(() => {
+    const targetCode =
+      user?.role === 'STORE_MANAGER'
+        ? user.branchCode
+        : selectedBranchCode || user?.authorizedBranches[0]?.code || undefined;
+    return buildQueryParams({ branchCode: targetCode });
+  }, [user, selectedBranchCode]);
+
+  const refreshWorkspaceData = useCallback(async () => {
+    if (!user) return;
+    setDataLoading(true);
+    try {
+      const [
+        dashRes,
+        tasksRes,
+        staffRes,
+        salesRes,
+        casesRes,
+        weightsRes,
+        fyRes,
+        aiRes,
+      ] = await Promise.all([
+        apiRequest<DashboardPayload>(`/api/v1/dashboard${scopeQuery}`),
+        apiRequest<{ records: any[] }>(`/api/v1/store-tasks${scopeQuery}`),
+        apiRequest<{ staff: any[] }>(
+          `/api/v1/staff${buildQueryParams({
+            branchCode:
+              user.role === 'AREA_MANAGER'
+                ? selectedBranchCode || undefined
+                : user.branchCode || undefined,
+          })}`
+        ),
+        apiRequest<{ records: any[] }>(
+          `/api/v1/sales-boxes${buildQueryParams({
+            branchCode:
+              user.role === 'AREA_MANAGER'
+                ? selectedBranchCode || undefined
+                : user.branchCode || undefined,
+          })}`
+        ),
+        apiRequest<{ records: any[] }>(`/api/v1/complaints${scopeQuery}`),
+        apiRequest<{ weights: HealthWeights }>(`/api/v1/branch-health/weights${singleBranchQuery}`),
+        apiRequest<FiscalYearConfig>('/api/v1/settings/fiscal-year'),
+        apiRequest<{ snapshot: { analysisJson: AIAnalysisResult } | null }>(
+          `/api/v1/ai/diagnostics${singleBranchQuery}`
+        ),
+      ]);
+
+      setDashboardData(dashRes);
+      setTasks((tasksRes.records || []).map(toFrontendTask));
+      setEmployees((staffRes.staff || []).map(toFrontendEmployee));
+      setSalesBoxes((salesRes.records || []).map(toFrontendSalesBox));
+      setCases((casesRes.records || []).map(toFrontendCase));
+      setHealthWeights(weightsRes.weights || DEFAULT_HEALTH_WEIGHTS);
+      setFiscalYear(fyRes);
+      setAiAnalysis(aiRes.snapshot?.analysisJson || null);
+      setDatabaseUnavailable(false);
+    } catch (err) {
+      handleDbError(err);
+    } finally {
+      setDataLoading(false);
+    }
+  }, [user, scopeQuery, singleBranchQuery, selectedBranchCode, handleDbError]);
+
+  useEffect(() => {
+    if (user) {
+      refreshWorkspaceData();
+    }
+  }, [user, refreshWorkspaceData]);
+
+  // Auth actions
+  const loginBranch = async (params: {
+    branchName: string;
+    branchCode: string;
+    accessCode: string;
+  }) => {
+    try {
+      const res = await apiRequest<{ user: AuthUser }>('/api/v1/auth/login-branch', {
+        method: 'POST',
+        body: params,
+        skipAuthRedirect: true,
+      });
+      setUser(res.user);
+      setSelectedBranchCodeState(res.user.branchCode || '');
+      return { success: true };
+    } catch (err) {
+      if (handleDbError(err)) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : 'Database unavailable.',
+        };
+      }
+      if (err instanceof ApiError) {
+        return {
+          success: false,
+          message: err.message,
+          retryAfterSeconds: err.retryAfterSeconds,
+        };
+      }
+      return { success: false, message: 'Sign-in failed.' };
     }
   };
 
-  // Overdue calculation helper
+  const loginArea = async (params: { username: string; password: string }) => {
+    try {
+      const res = await apiRequest<{ user: AuthUser }>('/api/v1/auth/login-area', {
+        method: 'POST',
+        body: params,
+        skipAuthRedirect: true,
+      });
+      setUser(res.user);
+      setSelectedBranchCodeState('');
+      return { success: true };
+    } catch (err) {
+      if (handleDbError(err)) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : 'Database unavailable.',
+        };
+      }
+      if (err instanceof ApiError) {
+        return {
+          success: false,
+          message: err.message,
+          retryAfterSeconds: err.retryAfterSeconds,
+        };
+      }
+      return { success: false, message: 'Sign-in failed.' };
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await apiRequest('/api/v1/auth/logout', { method: 'POST', skipAuthRedirect: true });
+    } catch {
+      // clear UI session regardless
+    }
+    setUser(null);
+    setDashboardData(null);
+    setTasks([]);
+    setEmployees([]);
+    setSalesBoxes([]);
+    setCases([]);
+    setAiAnalysis(null);
+  };
+
+  const logoutAll = async () => {
+    try {
+      await apiRequest('/api/v1/auth/logout-all', { method: 'POST', skipAuthRedirect: true });
+    } catch {
+      // ignore
+    }
+    setUser(null);
+    setDashboardData(null);
+    setTasks([]);
+    setEmployees([]);
+    setSalesBoxes([]);
+    setCases([]);
+    setAiAnalysis(null);
+  };
+
+  // Computed metrics derived from database records
   const now = new Date();
-  const isOverdue = (deadlineStr: string, status: TaskStatus) => {
-    if (status === 'completed') return false;
+  const isTaskOverdue = (deadlineStr: string, status: TaskStatus) => {
+    if (status === 'completed' || !deadlineStr) return false;
     try {
       return new Date(deadlineStr) < now;
     } catch {
@@ -230,25 +718,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // 5. Computed Metrics
-  const tasks = branchData.tasks || [];
-  const employees = branchData.employees || [];
-  const salesBoxes = branchData.salesBoxes || [];
-  const cases = branchData.cases || [];
-  const healthWeights = branchData.healthWeights || DEFAULT_HEALTH_WEIGHTS;
-
   const totalTasksCount = tasks.length;
   const completedTasksCount = tasks.filter((t) => t.status === 'completed').length;
-  const overdueTasksCount = tasks.filter((t) => isOverdue(t.deadline, t.status) || (t.status as any) === 'overdue').length;
+  const overdueTasksCount = tasks.filter((t) => isTaskOverdue(t.deadline, t.status)).length;
   const blockedTasksCount = tasks.filter((t) => t.status === 'blocked').length;
-  const pendingTasksCount = tasks.filter((t) => t.status === 'in_progress' || t.status === 'not_started').length;
-  const opsCompletionPercentage = totalTasksCount > 0 ? Math.round((completedTasksCount / totalTasksCount) * 100) : 0;
+  const pendingTasksCount = tasks.filter(
+    (t) => t.status === 'in_progress' || t.status === 'not_started'
+  ).length;
+  const opsCompletionPercentage =
+    totalTasksCount > 0 ? Math.round((completedTasksCount / totalTasksCount) * 100) : 0;
 
-  // Critical Alerts calculation
   const criticalAlerts = useMemo(() => {
-    const alerts: Array<{ id: string; title: string; titleAr: string; type: 'task' | 'case' | 'sales'; severity: 'critical' | 'high' }> = [];
+    const alerts: Array<{
+      id: string;
+      title: string;
+      titleAr: string;
+      type: 'task' | 'case' | 'sales';
+      severity: 'critical' | 'high';
+    }> = [];
 
-    // Blocked or critical overdue tasks
     tasks.forEach((t) => {
       if (t.status === 'blocked') {
         alerts.push({
@@ -258,7 +746,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           type: 'task',
           severity: 'critical',
         });
-      } else if (isOverdue(t.deadline, t.status) && (t.priority === 'critical' || t.priority === 'high')) {
+      } else if (
+        isTaskOverdue(t.deadline, t.status) &&
+        (t.priority === 'critical' || t.priority === 'high')
+      ) {
         alerts.push({
           id: `alert-task-overdue-${t.id}`,
           title: `Overdue Task: ${t.title}`,
@@ -269,27 +760,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
     });
 
-    // Escalated cases
     cases.forEach((c) => {
       if (c.status === 'escalated') {
         alerts.push({
           id: `alert-case-${c.id}`,
-          title: `Escalated Customer Case #${c.caseNumber} (${c.issueCategory})`,
-          titleAr: `شكوى عميل مصعدة #${c.caseNumber} (${c.issueCategoryAr || c.issueCategory})`,
+          title: `Escalated Complaint #${c.caseNumber} (${c.issueCategory})`,
+          titleAr: `شكوى مصعدة #${c.caseNumber} (${c.issueCategoryAr || c.issueCategory})`,
           type: 'case',
           severity: 'critical',
         });
       }
     });
 
-    // Sales boxes under 60% achievement with <= 10 remaining days
     salesBoxes.forEach((b) => {
       const ach = b.target > 0 ? (b.actual / b.target) * 100 : 100;
       if (ach < 60 && b.remainingWorkingDays <= 10) {
         alerts.push({
           id: `alert-sales-${b.id}`,
-          title: `Sales Deficit: ${b.name} (${Math.round(ach)}% achieved, ${b.remainingWorkingDays} days left)`,
-          titleAr: `عجز مبيعات: ${b.nameAr || b.name} (${Math.round(ach)}% محقق، متبقي ${b.remainingWorkingDays} أيام)`,
+          title: `Sales Deficit: ${b.name} (${Math.round(ach)}% achieved)`,
+          titleAr: `عجز مبيعات: ${b.nameAr || b.name} (${Math.round(ach)}% محقق)`,
           type: 'sales',
           severity: 'high',
         });
@@ -299,67 +788,86 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return alerts;
   }, [tasks, cases, salesBoxes]);
 
-  // Overall Sales Achievement %
   const salesOverallAchievement = useMemo(() => {
-    if (salesBoxes.length === 0) return 0;
-    const percentages = salesBoxes.map((b) => (b.target > 0 ? Math.min(100, (b.actual / b.target) * 100) : 100));
-    const avg = percentages.reduce((a, b) => a + b, 0) / percentages.length;
+    const valid = salesBoxes.filter((b) => b.target > 0);
+    if (valid.length === 0) return 0;
+    const avg =
+      valid.reduce((sum, b) => sum + Math.min(100, (b.actual / b.target) * 100), 0) /
+      valid.length;
     return Math.round(avg);
   }, [salesBoxes]);
 
-  // Employees needing coaching count (score < 75 in any key metric)
   const employeesNeedingCoachingCount = useMemo(() => {
     return employees.filter(
       (e) =>
         e.coachingStatus === 'needs_coaching' ||
-        e.productKnowledgeScore < 75 ||
-        e.productivityScore < 75 ||
-        e.customerExperienceScore < 75
+        (e.productKnowledgeScore !== null && e.productKnowledgeScore < 75) ||
+        (e.productivityScore !== null && e.productivityScore < 75) ||
+        (e.customerExperienceScore !== null && e.customerExperienceScore < 75)
     ).length;
   }, [employees]);
 
-  // Pending & repeated cases
-  const pendingCasesCount = cases.filter((c) => c.status === 'pending' || c.status === 'under_review').length;
+  const pendingCasesCount = cases.filter(
+    (c) => c.status === 'pending' || c.status === 'under_review'
+  ).length;
   const repeatedCasesCount = cases.filter((c) => c.isRepeated).length;
 
-  // 6. Branch Health Score Computation
   const healthCategories: HealthCategoryScore[] = useMemo(() => {
-    // 1. Operations Score: Based on completion rate & penalty for overdue/blocked
-    const opsBase = opsCompletionPercentage;
-    const overduePenalty = overdueTasksCount * 8;
-    const blockedPenalty = blockedTasksCount * 12;
-    const opsScore = Math.max(0, Math.min(100, Math.round(opsBase - overduePenalty - blockedPenalty)));
+    const opsScore =
+      totalTasksCount > 0
+        ? Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round(opsCompletionPercentage - overdueTasksCount * 8 - blockedTasksCount * 12)
+            )
+          )
+        : null;
 
-    // 2. Sales Score: Average percentage capped at 100
-    const salesScore = Math.min(100, Math.max(0, salesOverallAchievement));
+    const validBoxes = salesBoxes.filter((b) => b.target > 0);
+    const salesScore = validBoxes.length > 0 ? Math.min(100, salesOverallAchievement) : null;
 
-    // 3. Team Score: Average of knowledge, productivity, and CSAT scores
+    const scoredStaff = employees.filter(
+      (e) =>
+        e.productKnowledgeScore !== null &&
+        e.productivityScore !== null &&
+        e.customerExperienceScore !== null
+    );
     let teamScore: number | null = null;
-    if (employees.length > 0) {
-      const avgKnowledge = employees.reduce((acc, e) => acc + e.productKnowledgeScore, 0) / employees.length;
-      const avgProductivity = employees.reduce((acc, e) => acc + e.productivityScore, 0) / employees.length;
-      const avgCsat = employees.reduce((acc, e) => acc + e.customerExperienceScore, 0) / employees.length;
-      teamScore = Math.round((avgKnowledge + avgProductivity + avgCsat) / 3);
+    if (scoredStaff.length > 0) {
+      const avgK =
+        scoredStaff.reduce((s, e) => s + (e.productKnowledgeScore ?? 0), 0) / scoredStaff.length;
+      const avgP =
+        scoredStaff.reduce((s, e) => s + (e.productivityScore ?? 0), 0) / scoredStaff.length;
+      const avgC =
+        scoredStaff.reduce((s, e) => s + (e.customerExperienceScore ?? 0), 0) /
+        scoredStaff.length;
+      teamScore = Math.round((avgK + avgP + avgC) / 3);
     }
 
-    // 4. Customer Experience Score: 100 minus penalties for pending/escalated/repeated cases
     let cxScore: number | null = null;
     if (cases.length > 0) {
       const resolvedRatio = cases.filter((c) => c.status === 'resolved').length / cases.length;
       const escalatedCount = cases.filter((c) => c.status === 'escalated').length;
-      const base = resolvedRatio * 100;
-      cxScore = Math.max(0, Math.min(100, Math.round(base - escalatedCount * 10 - repeatedCasesCount * 5)));
+      cxScore = Math.max(
+        0,
+        Math.min(100, Math.round(resolvedRatio * 100 - escalatedCount * 10 - repeatedCasesCount * 5))
+      );
     }
 
-    // 5. Compliance & Audits Score: Ratio of completed audit tasks
-    const auditTasks = tasks.filter((t) => t.category === 'financial' || t.category === 'contracts');
+    const auditTasks = tasks.filter(
+      (t) => t.category === 'financial' || t.category === 'contracts'
+    );
     let complianceScore: number | null = null;
     if (auditTasks.length > 0) {
-      const completedAudits = auditTasks.filter((t) => t.status === 'completed').length;
-      complianceScore = Math.round((completedAudits / auditTasks.length) * 100);
+      complianceScore = Math.round(
+        (auditTasks.filter((t) => t.status === 'completed').length / auditTasks.length) * 100
+      );
     }
 
-    const getStatus = (score: number | null): 'optimal' | 'warning' | 'critical' | 'unavailable' => {
+    const getStatus = (
+      score: number | null
+    ): 'optimal' | 'warning' | 'critical' | 'unavailable' => {
       if (score === null) return 'unavailable';
       if (score >= 80) return 'optimal';
       if (score >= 60) return 'warning';
@@ -374,8 +882,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         weight: healthWeights.dailyOperations,
         score: opsScore,
         status: getStatus(opsScore),
-        details: `${completedTasksCount}/${totalTasksCount} tasks done, ${overdueTasksCount} overdue, ${blockedTasksCount} blocked`,
-        detailsAr: `${completedTasksCount} من ${totalTasksCount} مهام منجزة، ${overdueTasksCount} متأخرة، ${blockedTasksCount} معطلة`,
+        details: `${completedTasksCount}/${totalTasksCount} tasks completed, ${overdueTasksCount} overdue, ${blockedTasksCount} blocked`,
+        detailsAr: `${completedTasksCount} من ${totalTasksCount} مهام مكتملة، ${overdueTasksCount} متأخرة، ${blockedTasksCount} معطلة`,
       },
       {
         key: 'salesPerformance',
@@ -384,8 +892,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         weight: healthWeights.salesPerformance,
         score: salesScore,
         status: getStatus(salesScore),
-        details: `${salesOverallAchievement}% aggregate target run rate across ${salesBoxes.length} boxes`,
-        detailsAr: `${salesOverallAchievement}% متوسط تحقيق المستهدفات عبر ${salesBoxes.length} صناديق`,
+        details:
+          salesScore === null
+            ? 'No configured sales boxes yet'
+            : `${salesOverallAchievement}% across ${validBoxes.length} boxes`,
+        detailsAr:
+          salesScore === null
+            ? 'لا توجد صناديق مبيعات مُعدة بعد'
+            : `${salesOverallAchievement}% عبر ${validBoxes.length} صناديق`,
       },
       {
         key: 'teamPerformance',
@@ -394,38 +908,44 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         weight: healthWeights.teamPerformance,
         score: teamScore,
         status: getStatus(teamScore),
-        details: `${employees.length} team members monitored, ${employeesNeedingCoachingCount} requiring development`,
-        detailsAr: `${employees.length} موظفاً تحت المتابعة، ${employeesNeedingCoachingCount} يحتاجون جلسات توجيه`,
+        details: `${employees.length} team members recorded, ${employeesNeedingCoachingCount} needing coaching`,
+        detailsAr: `${employees.length} موظفين مسجلين، ${employeesNeedingCoachingCount} يحتاجون توجيهاً`,
       },
       {
         key: 'customerExperience',
-        name: 'Customer Experience',
-        nameAr: 'تجربة العملاء والشكاوى',
+        name: 'Complaints & CX',
+        nameAr: 'الشكاوى وتجربة العملاء',
         weight: healthWeights.customerExperience,
         score: cxScore,
         status: getStatus(cxScore),
-        details: `${pendingCasesCount} active cases, ${repeatedCasesCount} repeated issues flagged`,
-        detailsAr: `${pendingCasesCount} شكاوى نشطة، ${repeatedCasesCount} مشاكل متكررة مرصودة`,
+        details: `${pendingCasesCount} open complaints, ${repeatedCasesCount} repeated issues`,
+        detailsAr: `${pendingCasesCount} شكاوى مفتوحة، ${repeatedCasesCount} متكررة`,
       },
       {
         key: 'complianceAudits',
         name: 'Compliance & Audits',
-        nameAr: 'الامتثال والتدقيق المالي',
+        nameAr: 'الامتثال والتدقيق',
         weight: healthWeights.complianceAudits,
         score: complianceScore,
         status: getStatus(complianceScore),
-        details: `${auditTasks.filter((t) => t.status === 'completed').length}/${auditTasks.length} financial & contract audits verified`,
-        detailsAr: `${auditTasks.filter((t) => t.status === 'completed').length} من ${auditTasks.length} تدقيقات مالية وعقود مكتملة`,
+        details:
+          complianceScore === null
+            ? 'No financial/contract tasks logged'
+            : `${auditTasks.filter((t) => t.status === 'completed').length}/${auditTasks.length} audits verified`,
+        detailsAr:
+          complianceScore === null
+            ? 'لا توجد مهام تدقيق مسجلة'
+            : `${auditTasks.filter((t) => t.status === 'completed').length} من ${auditTasks.length} تدقيقات مكتملة`,
       },
     ];
   }, [
-    opsCompletionPercentage,
-    overdueTasksCount,
-    blockedTasksCount,
     totalTasksCount,
     completedTasksCount,
+    overdueTasksCount,
+    blockedTasksCount,
+    opsCompletionPercentage,
+    salesBoxes,
     salesOverallAchievement,
-    salesBoxes.length,
     employees,
     employeesNeedingCoachingCount,
     cases,
@@ -435,248 +955,341 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     healthWeights,
   ]);
 
-  // Overall Health Score = Weighted sum of available category scores
   const overallHealthScore = useMemo(() => {
     let totalWeightUsed = 0;
     let weightedSum = 0;
-
     healthCategories.forEach((cat) => {
       if (cat.score !== null) {
         weightedSum += (cat.score * cat.weight) / 100;
         totalWeightUsed += cat.weight;
       }
     });
-
     if (totalWeightUsed === 0) return 0;
-    // Normalize to 100 if any category is unavailable
     return Math.round((weightedSum / totalWeightUsed) * 100);
   }, [healthCategories]);
 
   const weakestHealthArea = useMemo(() => {
     const valid = healthCategories.filter((c) => c.score !== null);
     if (valid.length === 0) return null;
-    return valid.reduce((min, curr) => ((curr.score ?? 100) < (min.score ?? 100) ? curr : min), valid[0]);
+    return valid.reduce(
+      (min, curr) => ((curr.score ?? 100) < (min.score ?? 100) ? curr : min),
+      valid[0]
+    );
   }, [healthCategories]);
 
   const strongestHealthArea = useMemo(() => {
     const valid = healthCategories.filter((c) => c.score !== null);
     if (valid.length === 0) return null;
-    return valid.reduce((max, curr) => ((curr.score ?? 0) > (max.score ?? 0) ? curr : max), valid[0]);
+    return valid.reduce(
+      (max, curr) => ((curr.score ?? 0) > (max.score ?? 0) ? curr : max),
+      valid[0]
+    );
   }, [healthCategories]);
 
-  // 7. Operations CRUD
-  const addTask = (taskInput: Omit<Task, 'id' | 'branchCode' | 'createdAt' | 'updatedAt' | 'history'>) => {
-    const branchCode = currentBranchCode || 'BR-101';
-    const id = `${branchCode}-TSK-${Date.now().toString().slice(-4)}`;
-    const nowIso = new Date().toISOString();
-    const newTask: Task = {
-      ...taskInput,
-      id,
-      branchCode,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      history: [
-        {
-          id: `h-${Date.now()}`,
-          timestamp: nowIso,
-          action: 'Created Task',
-          user: currentBranch?.manager || 'Branch Manager',
-        },
-      ],
-    };
-    const updatedTasks = [newTask, ...tasks];
-    saveBranchData({ ...branchData, tasks: updatedTasks });
-  };
-
-  const updateTask = (updatedTask: Task) => {
-    const nowIso = new Date().toISOString();
-    const updatedTasks = tasks.map((t) => {
-      if (t.id === updatedTask.id) {
-        return {
-          ...updatedTask,
-          updatedAt: nowIso,
-          history: [
-            ...t.history,
-            {
-              id: `h-${Date.now()}`,
-              timestamp: nowIso,
-              action: 'Updated details',
-              user: currentBranch?.manager || 'Branch Manager',
-            },
-          ],
-        };
-      }
-      return t;
+  // Operations CRUD
+  const addTask = async (
+    taskInput: Omit<Task, 'id' | 'branchCode' | 'createdAt' | 'updatedAt' | 'history'>
+  ) => {
+    await apiRequest('/api/v1/store-tasks', {
+      method: 'POST',
+      body: {
+        agentName: taskInput.agentName || taskInput.owner || '',
+        date: taskInput.date || taskInput.deadline || new Date().toISOString().slice(0, 10),
+        title: taskInput.title,
+        titleAr: taskInput.titleAr || '',
+        description: taskInput.description || '',
+        descriptionAr: taskInput.descriptionAr || '',
+        category: taskInput.category,
+        subcategory: taskInput.subcategory || '',
+        owner: taskInput.owner || '',
+        ownerRole: taskInput.ownerRole || '',
+        priority: taskInput.priority,
+        status: taskInput.status,
+        dueDate: taskInput.deadline || taskInput.dueDate || '',
+        notes: taskInput.notes || '',
+        evidenceText: taskInput.evidenceText || '',
+      },
     });
-    saveBranchData({ ...branchData, tasks: updatedTasks });
+    await refreshWorkspaceData();
   };
 
-  const deleteTask = (taskId: string) => {
-    const updatedTasks = tasks.filter((t) => t.id !== taskId);
-    saveBranchData({ ...branchData, tasks: updatedTasks });
-  };
-
-  const updateTaskStatus = (taskId: string, newStatus: TaskStatus) => {
-    const nowIso = new Date().toISOString();
-    const updatedTasks = tasks.map((t) => {
-      if (t.id === taskId) {
-        return {
-          ...t,
-          status: newStatus,
-          completedAt: newStatus === 'completed' ? nowIso : t.completedAt,
-          updatedAt: nowIso,
-          history: [
-            ...t.history,
-            {
-              id: `h-${Date.now()}`,
-              timestamp: nowIso,
-              action: `Changed status to ${newStatus}`,
-              user: currentBranch?.manager || 'Branch Manager',
-            },
-          ],
-        };
-      }
-      return t;
+  const updateTask = async (taskInput: Task) => {
+    await apiRequest(`/api/v1/store-tasks/${taskInput.id}`, {
+      method: 'PATCH',
+      body: {
+        agentName: taskInput.agentName || taskInput.owner || '',
+        date: taskInput.date || taskInput.deadline || new Date().toISOString().slice(0, 10),
+        title: taskInput.title,
+        titleAr: taskInput.titleAr || '',
+        description: taskInput.description || '',
+        descriptionAr: taskInput.descriptionAr || '',
+        category: taskInput.category,
+        subcategory: taskInput.subcategory || '',
+        owner: taskInput.owner || '',
+        ownerRole: taskInput.ownerRole || '',
+        priority: taskInput.priority,
+        status: taskInput.status,
+        dueDate: taskInput.deadline || taskInput.dueDate || '',
+        notes: taskInput.notes || '',
+        evidenceText: taskInput.evidenceText || '',
+      },
     });
-    saveBranchData({ ...branchData, tasks: updatedTasks });
+    await refreshWorkspaceData();
   };
 
-  // 8. Team & Coaching CRUD
-  const addEmployee = (empInput: Omit<Employee, 'id' | 'branchCode' | 'history'>) => {
-    const branchCode = currentBranchCode || 'BR-101';
-    const id = `${branchCode}-EMP-${Date.now().toString().slice(-4)}`;
-    const newEmp: Employee = {
-      ...empInput,
-      id,
-      branchCode,
-      history: [],
-    };
-    const updated = [...employees, newEmp];
-    saveBranchData({ ...branchData, employees: updated });
+  const deleteTask = async (taskId: string) => {
+    await apiRequest(`/api/v1/store-tasks/${taskId}`, { method: 'DELETE' });
+    await refreshWorkspaceData();
   };
 
-  const updateEmployee = (empInput: Employee) => {
-    const updated = employees.map((e) => (e.id === empInput.id ? empInput : e));
-    saveBranchData({ ...branchData, employees: updated });
-  };
-
-  const addCoachingSession = (employeeId: string, session: Omit<CoachingHistoryItem, 'id'>) => {
-    const newHistoryItem: CoachingHistoryItem = {
-      ...session,
-      id: `ch-${Date.now()}`,
-    };
-    const updated = employees.map((e) => {
-      if (e.id === employeeId) {
-        return {
-          ...e,
-          coachingNotes: session.notes,
-          agreedActions: session.agreedActions,
-          followUpDate: e.followUpDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-          coachingStatus: 'in_progress' as const,
-          history: [newHistoryItem, ...e.history],
-        };
-      }
-      return e;
+  const updateTaskStatus = async (taskId: string, status: TaskStatus) => {
+    await apiRequest(`/api/v1/store-tasks/${taskId}`, {
+      method: 'PATCH',
+      body: { status },
     });
-    saveBranchData({ ...branchData, employees: updated });
+    await refreshWorkspaceData();
   };
 
-  // 9. Sales CRUD
-  const addSalesBox = (boxInput: Omit<SalesBox, 'id' | 'branchCode' | 'dailyHistory'>) => {
-    const branchCode = currentBranchCode || 'BR-101';
-    const id = `${branchCode}-SB-${Date.now().toString().slice(-4)}`;
-    const newBox: SalesBox = {
-      ...boxInput,
-      id,
-      branchCode,
-      dailyHistory: [
-        { day: 'Sun', actual: Math.round(boxInput.actual * 0.15), target: Math.round(boxInput.target * 0.15) },
-        { day: 'Mon', actual: Math.round(boxInput.actual * 0.16), target: Math.round(boxInput.target * 0.15) },
-        { day: 'Tue', actual: Math.round(boxInput.actual * 0.14), target: Math.round(boxInput.target * 0.15) },
-        { day: 'Wed', actual: Math.round(boxInput.actual * 0.18), target: Math.round(boxInput.target * 0.15) },
-        { day: 'Thu', actual: Math.round(boxInput.actual * 0.15), target: Math.round(boxInput.target * 0.15) },
-        { day: 'Fri', actual: Math.round(boxInput.actual * 0.08), target: Math.round(boxInput.target * 0.1) },
-        { day: 'Sat', actual: Math.round(boxInput.actual * 0.14), target: Math.round(boxInput.target * 0.15) },
-      ],
-    };
-    const updated = [...salesBoxes, newBox];
-    saveBranchData({ ...branchData, salesBoxes: updated });
+  // Staff & Coaching CRUD
+  const addEmployee = async (emp: Omit<Employee, 'id' | 'branchCode' | 'history'>) => {
+    await apiRequest('/api/v1/staff', {
+      method: 'POST',
+      body: {
+        sid: emp.identifier || emp.sid || '',
+        name: emp.name,
+        nameAr: emp.nameAr || '',
+        roleTitle: emp.role || emp.roleTitle || '',
+        roleTitleAr: emp.roleAr || emp.roleTitleAr || '',
+        productKnowledgeScore: emp.productKnowledgeScore,
+        productivityScore: emp.productivityScore,
+        customerExperienceScore: emp.customerExperienceScore,
+        coachingStatus: emp.coachingStatus,
+        developmentAreas: emp.developmentAreas || [],
+        coachingNotes: emp.coachingNotes || '',
+        agreedActions: emp.agreedActions || '',
+        assignedCoach: emp.assignedCoach || '',
+        followUpDate: emp.followUpDate || '',
+        progressStatus: emp.progressStatus || 'pending',
+        isActive: emp.isActive !== false,
+      },
+    });
+    await refreshWorkspaceData();
   };
 
-  const updateSalesBox = (updatedBox: SalesBox) => {
-    const updated = salesBoxes.map((b) => (b.id === updatedBox.id ? updatedBox : b));
-    saveBranchData({ ...branchData, salesBoxes: updated });
+  const updateEmployee = async (emp: Employee) => {
+    await apiRequest(`/api/v1/staff/${emp.id}`, {
+      method: 'PATCH',
+      body: {
+        sid: emp.identifier || emp.sid || '',
+        name: emp.name,
+        nameAr: emp.nameAr || '',
+        roleTitle: emp.role || emp.roleTitle || '',
+        roleTitleAr: emp.roleAr || emp.roleTitleAr || '',
+        productKnowledgeScore: emp.productKnowledgeScore,
+        productivityScore: emp.productivityScore,
+        customerExperienceScore: emp.customerExperienceScore,
+        coachingStatus: emp.coachingStatus,
+        developmentAreas: emp.developmentAreas || [],
+        coachingNotes: emp.coachingNotes || '',
+        agreedActions: emp.agreedActions || '',
+        assignedCoach: emp.assignedCoach || '',
+        followUpDate: emp.followUpDate || '',
+        progressStatus: emp.progressStatus || 'pending',
+        isActive: emp.isActive !== false,
+      },
+    });
+    await refreshWorkspaceData();
   };
 
-  // 10. Customer Cases CRUD
-  const addCase = (caseInput: Omit<CustomerCase, 'id' | 'branchCode' | 'createdAt' | 'updatedAt'>) => {
-    const branchCode = currentBranchCode || 'BR-101';
-    const id = `${branchCode}-CAS-${Date.now().toString().slice(-4)}`;
-    const nowIso = new Date().toISOString();
-    const newCase: CustomerCase = {
-      ...caseInput,
-      id,
-      branchCode,
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-    const updated = [newCase, ...cases];
-    saveBranchData({ ...branchData, cases: updated });
+  const deleteEmployee = async (empId: string) => {
+    await apiRequest(`/api/v1/staff/${empId}`, { method: 'DELETE' });
+    await refreshWorkspaceData();
   };
 
-  const updateCase = (updatedCase: CustomerCase) => {
-    const nowIso = new Date().toISOString();
-    const updated = cases.map((c) => (c.id === updatedCase.id ? { ...updatedCase, updatedAt: nowIso } : c));
-    saveBranchData({ ...branchData, cases: updated });
+  const addCoachingSession = async (
+    employeeId: string,
+    session: Omit<CoachingHistoryItem, 'id'>
+  ) => {
+    await apiRequest(`/api/v1/staff/${employeeId}/coaching-sessions`, {
+      method: 'POST',
+      body: {
+        sessionDate: session.date,
+        coach: session.coach,
+        topic: session.topic,
+        agreedActions: session.agreedActions || '',
+        scoreImprovement: session.scoreImprovement || '',
+        notes: session.notes || '',
+      },
+    });
+    await refreshWorkspaceData();
   };
 
-  // 11. Health Weights
-  const updateHealthWeights = (newWeights: HealthWeights) => {
-    saveBranchData({ ...branchData, healthWeights: newWeights });
+  // Sales Boxes CRUD
+  const addSalesBox = async (box: Omit<SalesBox, 'id' | 'branchCode' | 'dailyHistory'>) => {
+    await apiRequest('/api/v1/sales-boxes', {
+      method: 'POST',
+      body: {
+        boxKey: box.boxKey || undefined,
+        name: box.name,
+        nameAr: box.nameAr || '',
+        target: Number(box.target) || 0,
+        actual: Number(box.actual) || 0,
+        unit: box.unit || '',
+        unitAr: box.unitAr || '',
+        remainingWorkingDays: Number(box.remainingWorkingDays) || 0,
+        trend: box.trend || 'stable',
+      },
+    });
+    await refreshWorkspaceData();
   };
 
-  const resetHealthWeights = () => {
-    saveBranchData({ ...branchData, healthWeights: { ...DEFAULT_HEALTH_WEIGHTS } });
+  const updateSalesBox = async (box: SalesBox) => {
+    await apiRequest(`/api/v1/sales-boxes/${box.id}`, {
+      method: 'PATCH',
+      body: {
+        name: box.name,
+        nameAr: box.nameAr || '',
+        target: Number(box.target) || 0,
+        actual: Number(box.actual) || 0,
+        unit: box.unit || '',
+        unitAr: box.unitAr || '',
+        remainingWorkingDays: Number(box.remainingWorkingDays) || 0,
+        trend: box.trend || 'stable',
+      },
+    });
+    await refreshWorkspaceData();
   };
 
-  // 12. AI Diagnostics (Server-side Gemini call with fallback)
-  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(() => {
-    return branchData.cachedAiAnalysis || null;
-  });
-  const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
+  const deleteSalesBox = async (boxId: string) => {
+    await apiRequest(`/api/v1/sales-boxes/${boxId}`, { method: 'DELETE' });
+    await refreshWorkspaceData();
+  };
 
+  // Complaints CRUD
+  const addCase = async (
+    caseItem: Omit<CustomerCase, 'id' | 'branchCode' | 'createdAt' | 'updatedAt'>
+  ) => {
+    await apiRequest('/api/v1/complaints', {
+      method: 'POST',
+      body: {
+        caseNumber: caseItem.caseNumber,
+        customerIdentifier: caseItem.customerIdentifier || '',
+        agentName: caseItem.agentName || '',
+        date: caseItem.date || new Date().toISOString().slice(0, 10),
+        category: caseItem.issueCategory || caseItem.category || 'General',
+        categoryAr: caseItem.issueCategoryAr || caseItem.categoryAr || '',
+        description: caseItem.description || '',
+        isRepeated: Boolean(caseItem.isRepeated),
+        repeatedMatchCriteria: caseItem.repeatedMatchCriteria || '',
+        rootCause: caseItem.rootCause || '',
+        rootCauseAr: caseItem.rootCauseAr || '',
+        assignedOwner: caseItem.assignedOwner || '',
+        resolutionDeadline: caseItem.resolutionDeadline || '',
+        status: caseItem.status || 'pending',
+        correctiveAction: caseItem.correctiveAction || '',
+        notes: caseItem.resolutionNotes || caseItem.notes || '',
+      },
+    });
+    await refreshWorkspaceData();
+  };
+
+  const updateCase = async (caseItem: CustomerCase) => {
+    await apiRequest(`/api/v1/complaints/${caseItem.id}`, {
+      method: 'PATCH',
+      body: {
+        caseNumber: caseItem.caseNumber,
+        customerIdentifier: caseItem.customerIdentifier || '',
+        agentName: caseItem.agentName || '',
+        date: caseItem.date || caseItem.createdAt.slice(0, 10),
+        category: caseItem.issueCategory || caseItem.category || 'General',
+        categoryAr: caseItem.issueCategoryAr || caseItem.categoryAr || '',
+        description: caseItem.description || '',
+        isRepeated: Boolean(caseItem.isRepeated),
+        repeatedMatchCriteria: caseItem.repeatedMatchCriteria || '',
+        rootCause: caseItem.rootCause || '',
+        rootCauseAr: caseItem.rootCauseAr || '',
+        assignedOwner: caseItem.assignedOwner || '',
+        resolutionDeadline: caseItem.resolutionDeadline || '',
+        status: caseItem.status,
+        correctiveAction: caseItem.correctiveAction || '',
+        notes: caseItem.resolutionNotes || caseItem.notes || '',
+      },
+    });
+    await refreshWorkspaceData();
+  };
+
+  const deleteCase = async (caseId: string) => {
+    await apiRequest(`/api/v1/complaints/${caseId}`, { method: 'DELETE' });
+    await refreshWorkspaceData();
+  };
+
+  // Health Weights & Settings
+  const updateHealthWeights = async (weights: HealthWeights) => {
+    await apiRequest('/api/v1/branch-health/weights', {
+      method: 'PUT',
+      body: weights,
+    });
+    setHealthWeights(weights);
+  };
+
+  const resetHealthWeights = async () => {
+    await updateHealthWeights({ ...DEFAULT_HEALTH_WEIGHTS });
+  };
+
+  const saveFiscalYear = async (payload: FiscalYearConfig) => {
+    await apiRequest('/api/v1/settings/fiscal-year', {
+      method: 'PUT',
+      body: {
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        pillarTargets: payload.pillarTargets?.map((pt) => ({
+          pillar: pt.pillar,
+          monthlyTarget: pt.monthlyTarget,
+        })),
+      },
+    });
+    await refreshWorkspaceData();
+  };
+
+  const updateBranchProfile = async (payload: {
+    managerName?: string;
+    managerNameAr?: string;
+    businessDate?: string;
+    targetDailyRevenue?: number;
+  }) => {
+    await apiRequest('/api/v1/settings/branch-profile', {
+      method: 'PATCH',
+      body: payload,
+    });
+    const me = await apiRequest<{ user: AuthUser }>('/api/v1/auth/me');
+    setUser(me.user);
+    await refreshWorkspaceData();
+  };
+
+  // Server-side grounded Gemini Diagnostics
   const runAiDiagnostic = async () => {
     setIsAiLoading(true);
+    setAiError(null);
     try {
-      // Send actual stored branch records to server endpoint
-      const response = await fetch('/api/gemini/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          branch: branchData.branch,
-          tasks,
-          employees,
-          salesBoxes,
-          cases,
-          healthCategories,
-          overallHealthScore,
-          language,
-        }),
-      });
+      const targetBranch =
+        user?.role === 'STORE_MANAGER'
+          ? user.branchCode || undefined
+          : selectedBranchCode || user?.authorizedBranches[0]?.code || undefined;
 
-      if (response.ok) {
-        const result: AIAnalysisResult = await response.json();
-        setAiAnalysis(result);
-        saveBranchData({ ...branchData, cachedAiAnalysis: result });
-      } else {
-        throw new Error('Server AI endpoint returned non-200');
-      }
+      const result = await apiRequest<AIAnalysisResult>('/api/v1/ai/diagnostics/analyze', {
+        method: 'POST',
+        body: {
+          branchCode: targetBranch,
+          language,
+        },
+      });
+      setAiAnalysis(result);
     } catch (err) {
-      console.warn('Direct AI endpoint unavailable, generating grounded deterministic action plan from actual stored records', err);
-      // Fallback: Generate 100% grounded deterministic plan from actual records
-      const fallback = generateDeterministicPlan(branchData, language);
-      setAiAnalysis(fallback);
-      saveBranchData({ ...branchData, cachedAiAnalysis: fallback });
+      setAiError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to run AI diagnostic analysis.'
+      );
     } finally {
       setIsAiLoading(false);
     }
@@ -684,23 +1297,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const toggleActionPlanItem = (itemId: string) => {
     if (!aiAnalysis) return;
-    const updatedPlan = aiAnalysis.actionPlan.map((item) => {
-      if (item.id === itemId) {
-        return { ...item, isCompleted: !item.isCompleted };
-      }
-      return item;
+    setAiAnalysis({
+      ...aiAnalysis,
+      actionPlan: aiAnalysis.actionPlan.map((item) =>
+        item.id === itemId ? { ...item, isCompleted: !item.isCompleted } : item
+      ),
     });
-    const updatedAnalysis = { ...aiAnalysis, actionPlan: updatedPlan };
-    setAiAnalysis(updatedAnalysis);
-    saveBranchData({ ...branchData, cachedAiAnalysis: updatedAnalysis });
-  };
-
-  // 13. Reset to Demo
-  const resetBranchToDemo = () => {
-    const code = currentBranchCode || 'BR-101';
-    const fresh = getInitialBranchData(code);
-    saveBranchData(fresh);
-    setAiAnalysis(null);
   };
 
   return (
@@ -711,12 +1313,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         theme,
         setTheme,
         t,
-        currentBranch,
+        authLoading,
+        dataLoading,
+        databaseUnavailable,
+        databaseErrorMessage,
+        missingDbVars,
+        geminiConfigured,
+        refreshHealth,
+        user,
         isAuthenticated,
-        loginWithBranchCode,
+        canEdit,
+        configuredBranches,
+        unconfiguredBranches,
+        authorizedBranches,
+        selectedBranchCode,
+        setSelectedBranchCode,
+        currentBranch,
+        dateRange,
+        setDateRange,
+        fiscalYear,
+        refreshWorkspaceData,
+        reloadBranchesCatalog,
+        loginBranch,
+        loginArea,
         logout,
-        availableBranches: DEMO_BRANCHES,
-        switchBranchCode,
+        logoutAll,
+        dashboardData,
         tasks,
         employees,
         salesBoxes,
@@ -724,6 +1346,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         healthWeights,
         aiAnalysis,
         isAiLoading,
+        aiError,
         opsCompletionPercentage,
         totalTasksCount,
         completedTasksCount,
@@ -745,16 +1368,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateTaskStatus,
         addEmployee,
         updateEmployee,
+        deleteEmployee,
         addCoachingSession,
         addSalesBox,
         updateSalesBox,
+        deleteSalesBox,
         addCase,
         updateCase,
+        deleteCase,
         updateHealthWeights,
         resetHealthWeights,
+        saveFiscalYear,
+        updateBranchProfile,
         runAiDiagnostic,
         toggleActionPlanItem,
-        resetBranchToDemo,
       }}
     >
       {children}
@@ -763,200 +1390,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 };
 
 export const useApp = () => {
-  const context = useContext(AppContext);
-  if (!context) {
-    throw new Error('useApp must be used within an AppProvider');
-  }
-  return context;
+  const ctx = useContext(AppContext);
+  if (!ctx) throw new Error('useApp must be used within an AppProvider');
+  return ctx;
 };
-
-// Deterministic Grounded Plan Generator (Always uses actual records, zero hallucinations)
-function generateDeterministicPlan(data: BranchDataStore, lang: Language): AIAnalysisResult {
-  const { tasks, employees, salesBoxes, cases, branch } = data;
-
-  const overdue = tasks.filter((t) => t.status !== 'completed' && new Date(t.deadline) < new Date());
-  const blocked = tasks.filter((t) => t.status === 'blocked');
-  const needsCoaching = employees.filter(
-    (e) => e.coachingStatus === 'needs_coaching' || e.productKnowledgeScore < 75 || e.productivityScore < 75
-  );
-
-  // Find weakest sales box
-  const sortedBoxes = [...salesBoxes].sort((a, b) => {
-    const achA = a.target > 0 ? a.actual / a.target : 1;
-    const achB = b.target > 0 ? b.actual / b.target : 1;
-    return achA - achB;
-  });
-  const weakestBox = sortedBoxes[0];
-
-  const plan: AIActionPlanItem[] = [];
-
-  // 1. Critical blocked tasks
-  if (blocked.length > 0) {
-    const b = blocked[0];
-    plan.push({
-      id: `ai-plan-blocked-${b.id}`,
-      issue: `Operational Bottleneck: ${b.title}`,
-      issueAr: `اختناق تشغيلي: ${b.titleAr || b.title}`,
-      evidence: `Task is flagged as Blocked. Notes: "${b.notes}"`,
-      evidenceAr: `المهمة مصنفة كمعطلة. الملاحظات: "${b.notes}"`,
-      businessImpact: 'Prevents completion of daily audit ledger and risks compliance variance.',
-      businessImpactAr: 'يعيق إتمام تسوية العمليات اليومية ويهدد بالوقوع في مخالفات تدقيق.',
-      recommendedAction: `Branch Manager should coordinate directly with regional operations to release liquidity or support for ${b.owner}.`,
-      recommendedActionAr: `على مدير الفرع التنسيق الفوري مع العمليات المركزية لتوفير السيولة والدعم للمسؤول ${b.owner}.`,
-      priority: 'Critical',
-      suggestedOwner: b.owner,
-      suggestedDeadline: 'Today 13:00',
-      isCompleted: false,
-    });
-  }
-
-  // 2. Weakest Sales Box
-  if (weakestBox) {
-    const ach = Math.round((weakestBox.actual / weakestBox.target) * 100);
-    const rem = Math.max(0, weakestBox.target - weakestBox.actual);
-    const runRate = Math.ceil(rem / Math.max(1, weakestBox.remainingWorkingDays));
-
-    plan.push({
-      id: `ai-plan-sales-${weakestBox.id}`,
-      issue: `Critical Sales Gap in ${weakestBox.name}`,
-      issueAr: `فجوة مبيعات حرجة في صندوق ${weakestBox.nameAr || weakestBox.name}`,
-      evidence: `Recorded achievement is ${ach}% (${weakestBox.actual}/${weakestBox.target} ${weakestBox.unit}) with ${weakestBox.remainingWorkingDays} days left.`,
-      evidenceAr: `الإنجاز المسجل ${ach}% (${weakestBox.actual}/${weakestBox.target} ${weakestBox.unitAr || weakestBox.unit}) ومتبقي ${weakestBox.remainingWorkingDays} أيام عمل.`,
-      businessImpact: `Shortfall of ${rem} ${weakestBox.unit}. Daily run rate must rise to ${runRate}/day to prevent missing quarterly incentive.`,
-      businessImpactAr: `عجز قدره ${rem} ${weakestBox.unitAr || weakestBox.unit}. يجب رفع معدل الإنجاز اليومي إلى ${runRate}/يوم لتفادي خسارة حافز الفرع.`,
-      recommendedAction: `Focus walk-in traffic qualification on ${weakestBox.name} bundles and review pending customer leads.`,
-      recommendedActionAr: `توجيه استشاريي المبيعات للتركيز على عروض ${weakestBox.nameAr || weakestBox.name} ومتابعة العملاء المحتملين.`,
-      priority: 'High',
-      suggestedOwner: 'Sales Supervisors',
-      suggestedDeadline: 'End of Business Week',
-      isCompleted: false,
-    });
-  }
-
-  // 3. Team member development
-  if (needsCoaching.length > 0) {
-    const emp = needsCoaching[0];
-    plan.push({
-      id: `ai-plan-emp-${emp.id}`,
-      issue: `Employee Performance Variance: ${emp.name} (${emp.role})`,
-      issueAr: `تباين في أداء الموظف: ${emp.nameAr || emp.name} (${emp.roleAr || emp.role})`,
-      evidence: `Product Knowledge score: ${emp.productKnowledgeScore}%, Productivity score: ${emp.productivityScore}%.`,
-      evidenceAr: `درجة المعرفة بالمنتجات: ${emp.productKnowledgeScore}%، ومعدل الإنتاجية: ${emp.productivityScore}%.`,
-      businessImpact: 'Depresses branch conversion rate and increases customer transaction wait times.',
-      businessImpactAr: 'يقلل من معدل تحويل المبيعات للفرع ويزيد من وقت انتظار العملاء.',
-      recommendedAction: `Execute targeted 1-on-1 coaching session on agreed areas: ${emp.developmentAreas.slice(0, 2).join(', ')}.`,
-      recommendedActionAr: `عقد جلسة توجيه فردية مركزة على مجالات التطوير: ${emp.developmentAreas.slice(0, 2).join('، ')}.`,
-      priority: 'Medium',
-      suggestedOwner: emp.assignedCoach || branch.manager,
-      suggestedDeadline: emp.followUpDate || '2026-11-06',
-      isCompleted: false,
-    });
-  }
-
-  // 4. Repeated Customer Complaints
-  const repeated = cases.filter((c) => c.isRepeated);
-  if (repeated.length > 0) {
-    const c = repeated[0];
-    plan.push({
-      id: `ai-plan-cx-${c.id}`,
-      issue: `Recurring Customer Friction: ${c.issueCategory}`,
-      issueAr: `احتكاك متكرر مع العملاء: ${c.issueCategoryAr || c.issueCategory}`,
-      evidence: `${c.repeatedMatchCriteria}. Identified root cause: ${c.rootCause}.`,
-      evidenceAr: `${c.repeatedMatchCriteria}. السبب الجذري المحدد: ${c.rootCauseAr || c.rootCause}.`,
-      businessImpact: 'Damages branch CSAT score and triggers repeat visit escalations.',
-      businessImpactAr: 'يؤثر سلباً على مؤشر رضا العملاء ويؤدي لتصعيد الزيارات المتكررة.',
-      recommendedAction: `Apply corrective protocol: ${c.correctiveAction || 'Inspect terminal hardware and review staff handling flow.'}`,
-      recommendedActionAr: `تطبيق بروتوكول التصحيح: ${c.correctiveAction || 'فحص أجهزة الطرفية ومراجعة مسار تعامل الموظفين مع الحالة.'}`,
-      priority: 'High',
-      suggestedOwner: c.assignedOwner,
-      suggestedDeadline: c.resolutionDeadline || 'Today 16:00',
-      isCompleted: false,
-    });
-  }
-
-  return {
-    generatedAt: new Date().toISOString(),
-    isLiveAi: false,
-    modelUsed: 'Grounded Operational Rules Engine (Fallback)',
-    branchOverview: {
-      summary: `Branch ${branch.code} (${branch.name}) is operating at ${data.tasks.filter((t) => t.status === 'completed').length}/${data.tasks.length} task completion rate with ${blocked.length} blocked task and ${overdue.length} overdue item.`,
-      summaryAr: `فرع ${branch.code} (${branch.nameAr}) يعمل بنسبة إنجاز مهام ${data.tasks.filter((t) => t.status === 'completed').length} من ${data.tasks.length}، مع وجود ${blocked.length} مهمة معطلة و${overdue.length} مهمة متأخرة.`,
-      operationalWeaknesses: [
-        blocked.length > 0 ? `Active task bottleneck: ${blocked[0].title}` : 'None flagged in current shift',
-        overdue.length > 0 ? `${overdue.length} tasks past scheduled SLA deadline` : 'All tasks within SLA window',
-      ],
-      operationalWeaknessesAr: [
-        blocked.length > 0 ? `عائق تشغيلي نشط: ${blocked[0].titleAr || blocked[0].title}` : 'لا توجد عوائق في الوردية الحالية',
-        overdue.length > 0 ? `${overdue.length} مهام تجاوزت الموعد المحدد` : 'جميع المهام ضمن النطاق الزمني المحدد',
-      ],
-      immediatePriorities: [
-        'Resolve digital cash float ceiling ticket',
-        'Audit corporate postpaid contract attachments',
-        'Hold daily sales standup for Enterprise Box',
-      ],
-      immediatePrioritiesAr: [
-        'حل مشكلة سقف رصيد المحفظة النقدية',
-        'تدقيق مرفقات عقود الشركات المتأخرة',
-        'عقد اجتماع صباحي سريع لتنشيط مبيعات الشركات',
-      ],
-    },
-    operationsIntelligence: {
-      overdueTasksCount: overdue.length,
-      auditStatus: `${tasks.filter((t) => (t.category === 'financial' || t.category === 'contracts') && t.status === 'completed').length} audits completed`,
-      auditStatusAr: `تم إنجاز تدقيقات الخزينة والعقود بنجاح`,
-      criticalFindings: [
-        'Drawer reconciliation 1-4 completed with zero financial variance.',
-        'High cash-out withdrawal volume during early morning peak.',
-      ],
-      criticalFindingsAr: [
-        'تمت مطابقة أدراج الخزينة 1-4 بدون أي فروق مالية.',
-        'كثافة سحب نقدي عالية خلال ذروة الصباح المبكرة.',
-      ],
-    },
-    teamInsights: {
-      criticalGaps: [
-        'Enterprise rate card memorization in junior sales reps',
-        'CRM diagnostic detail accuracy on complaint tickets',
-      ],
-      criticalGapsAr: [
-        'حفظ باقات الشركات للموظفين الجدد',
-        'دقة تفاصيل التشخيص في بطاقات الشكاوى على النظام',
-      ],
-      topPerformer: 'Rana Soliman (CSAT 91%, Zero escalations)',
-      topPerformerAr: 'رنا سليمان (رضا عملاء 91%، بدون أي تصعيد)',
-      priorityCoachees: needsCoaching.map((e) => e.name),
-      priorityCoacheesAr: needsCoaching.map((e) => e.nameAr || e.name),
-    },
-    salesIntelligence: {
-      weakestBox: weakestBox ? `${weakestBox.name} (${Math.round((weakestBox.actual / weakestBox.target) * 100)}%)` : 'None',
-      weakestBoxAr: weakestBox ? `${weakestBox.nameAr || weakestBox.name} (${Math.round((weakestBox.actual / weakestBox.target) * 100)}%)` : 'لا يوجد',
-      runRateAlert: weakestBox
-        ? `Requires ${Math.ceil(Math.max(0, weakestBox.target - weakestBox.actual) / Math.max(1, weakestBox.remainingWorkingDays))} per day`
-        : 'On track',
-      runRateAlertAr: weakestBox
-        ? `يتطلب إنجاز ${Math.ceil(Math.max(0, weakestBox.target - weakestBox.actual) / Math.max(1, weakestBox.remainingWorkingDays))} يومياً`
-        : 'ضمن المسار المستهدف',
-      strategicActions: [
-        'Bundle fixed VDSL packages with Postpaid line upgrades',
-        'Active promotion of At Home 4G router seasonal campaign',
-      ],
-      strategicActionsAr: [
-        'ربط باقات الإنترنت المنزلي مع ترقيات خطوط الفاتورة',
-        'تنشيط عروض راوتر الإنترنت المنزلي اللاسلكي للزوار',
-      ],
-    },
-    customerInsights: {
-      agingSummary: `${cases.filter((c) => c.status === 'pending').length} cases pending review, average aging 14.5 hours`,
-      agingSummaryAr: `${cases.filter((c) => c.status === 'pending').length} شكاوى معلقة، متوسط العمر الزمني 14.5 ساعة`,
-      recurringRootCauses: [
-        'POS biometric reader timeout at Counter 2',
-        'Peak hours counter allocation imbalance (12:00 - 14:00)',
-      ],
-      recurringRootCausesAr: [
-        'توقف قارئ البصمة في الكاونتر 2',
-        'توزيع غير متوازن للكاونترات في وقت الذروة (12:00 - 14:00)',
-      ],
-    },
-    actionPlan: plan,
-  };
-}

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Store Performance Management</title>
+  <style>
+    :root{--navy:#092d52;--blue:#0866df;--bg:#f3f7fd;--ink:#142b49;--muted:#71829a;--line:#e3ebf5;--green:#0eaa72;--red:#e5484d;--shadow:0 8px 28px rgba(17,54,94,.08)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px Inter,Arial,sans-serif}button,input,select{font:inherit}button{cursor:pointer;border:0;border-radius:10px;padding:10px 14px;font-weight:650}.primary{background:var(--blue);color:white}.soft{background:#eaf2ff;color:#0758c9}.danger{background:#fff0f0;color:#c52b35}.hidden{display:none!important}
+    .login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px 14px;background:linear-gradient(135deg,#092d52,#1267c9);position:relative}.login{width:min(420px,100%);background:white;padding:28px;border-radius:22px;box-shadow:0 12px 36px #001b3a35}.brand{font-size:25px;font-weight:850;color:var(--navy);letter-spacing:-.5px;text-align:center}.sub{color:var(--muted);margin:6px 0 22px;text-align:center}.login-footer{width:100%;text-align:center;color:#ffffffa8;font-size:10px;font-weight:300;letter-spacing:.35px;padding-top:18px}.field{display:grid;gap:6px;margin:13px 0}.field label{font-size:12px;font-weight:700;color:#50627b}.field input,.field select{width:100%;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff;outline:none}.field input:focus{border-color:var(--blue);box-shadow:0 0 0 3px #0866df18}.login button{width:100%;margin-top:8px}.switch{display:flex;gap:8px;margin:14px 0}.switch button{flex:1;background:#eef3fa;color:#49617d}.switch button.active{background:var(--navy);color:white}.error{color:#c52b35;font-size:12px;min-height:16px}
+    .app{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}.sidebar{background:var(--navy);color:white;padding:20px 14px;display:flex;flex-direction:column;gap:18px;min-height:100vh}.logo{font-size:20px;font-weight:850;padding:4px 10px}.logo small{display:block;font-size:10px;font-weight:400;opacity:.75;margin-top:4px}.profile{background:#ffffff13;border:1px solid #ffffff1c;border-radius:14px;padding:13px;font-size:12px}.nav{display:grid;gap:5px}.nav button{display:flex;gap:11px;align-items:center;text-align:left;background:transparent;color:#e8f1fc;padding:11px 12px}.nav button.active,.nav button:hover{background:#0866df;color:white}.side-bottom{margin-top:auto}.main{min-width:0;padding:22px 24px 34px}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}.title{font-size:24px;font-weight:850;letter-spacing:-.6px}.muted{color:var(--muted)}.top-actions{display:flex;gap:8px;align-items:center}.lang{background:white;border:1px solid var(--line);color:var(--ink)}
+    .cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px}.kpi{background:white;border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:var(--shadow);min-width:0}.kpi .label{font-size:12px;color:var(--muted);font-weight:650}.kpi strong{display:block;font-size:27px;margin-top:8px}.panel{background:white;border:1px solid var(--line);border-radius:16px;padding:16px;box-shadow:var(--shadow);min-width:0;margin-bottom:15px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:13px}.panel h2{font-size:16px;margin:0}.pillars{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.pillar{padding:12px;border-radius:12px;background:#f5f8fd}.pillar b{display:block;margin-bottom:8px}.bar{height:8px;background:#e4ebf5;border-radius:99px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#0866df,#22b7c5);border-radius:99px}.table-wrap{overflow:auto;max-width:100%}table{width:100%;border-collapse:collapse;min-width:600px}th,td{padding:11px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}th{font-size:12px;color:#63748c;background:#f7f9fc}td{font-size:13px}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.toolbar button{padding:8px 11px;font-size:12px}.editable-cell{cursor:pointer}.editable-cell:hover{background:#f0f6ff}.empty{padding:30px;text-align:center;color:var(--muted)}.mobile-menu{display:none}.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#102d4b;color:white;padding:11px 16px;border-radius:12px;box-shadow:var(--shadow);z-index:20}
+    .rtl{direction:rtl}.rtl .nav button{text-align:right}.rtl th,.rtl td{text-align:right}.rtl .profile{text-align:right}
+    @media(max-width:1100px){.cards{grid-template-columns:repeat(3,minmax(0,1fr))}.pillars{grid-template-columns:repeat(3,minmax(0,1fr))}}
+    .filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:end}.filter-grid label{display:grid;gap:6px;font-size:12px;font-weight:700;color:var(--muted)}.filter-grid select,.filter-grid input{width:100%;min-width:0;padding:10px;border:1px solid var(--line);border-radius:9px;background:#fff;color:var(--ink)}.filter-actions{display:flex;gap:8px;flex-wrap:wrap}.area-filters{margin-bottom:14px}@media(max-width:760px){.filter-grid{grid-template-columns:1fr 1fr}.filter-actions{grid-column:1/-1}.filter-actions button{flex:1}}
+    @media(max-width:760px){.app{display:block}.sidebar{position:fixed;z-index:30;top:0;bottom:0;left:0;width:270px;min-height:0;transform:translateX(-105%);transition:transform .22s ease;box-shadow:20px 0 40px #001a3433}.sidebar.open{transform:translateX(0)}.main{padding:14px 12px 26px}.top{align-items:flex-start}.title{font-size:18px}.mobile-menu{display:inline-flex;background:white;border:1px solid var(--line);padding:9px}.cards{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.kpi{padding:12px}.kpi strong{font-size:23px}.pillars{grid-template-columns:1fr 1fr}.panel{padding:13px}.table-wrap{overflow:visible}table{display:none}.mobile-records{display:grid;gap:9px}.record-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff}.record-line{display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #f0f3f8}.record-line:last-child{border:0}.record-line span:first-child{color:var(--muted);font-size:11px}.record-line span:last-child{text-align:right;overflow-wrap:anywhere}.toolbar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.toolbar button{width:100%}.top-actions .lang{font-size:12px;padding:8px}.top-actions #userLabel{display:none}}
+    @media(min-width:761px){.mobile-records{display:none}}
+
+    .schedule-controls{display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:14px}.schedule-controls .field{margin:0;min-width:190px;flex:1}.schedule-grid{overflow:auto;max-width:100%;border:1px solid var(--line);border-radius:12px}.schedule-grid table{min-width:760px}.schedule-grid th:first-child,.schedule-grid td:first-child{position:sticky;left:0;background:#f7f9fc;z-index:1;font-weight:700}.shift-select{min-width:88px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:white;color:var(--ink)}.shift-AM{background:#e7f1ff}.shift-PM{background:#e8f7ef}.shift-FULL{background:#eef1f6}.shift-OFF{background:#fff0f0}.shift-SUP{background:#fff5df}.schedule-day{border:1px solid var(--line);border-radius:13px;padding:12px;background:#fff}.schedule-day h3{font-size:13px;margin:0 0 9px}.schedule-agent{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid #f0f3f8}.schedule-agent small{display:block;color:var(--muted)}.schedule-mobile{display:grid;gap:9px}.store-context{display:flex;gap:8px;flex-wrap:wrap;margin:-7px 0 14px}.store-context span{font-size:11px;background:#eaf2ff;color:#17528d;border-radius:999px;padding:6px 10px}
+    @media(max-width:760px){.schedule-grid{display:none}.schedule-mobile{display:grid}.schedule-controls{display:grid;grid-template-columns:1fr}.schedule-controls .field{min-width:0}.schedule-agent .shift-select{min-width:104px}.main{overflow-x:hidden}}
+    @media(min-width:761px){.schedule-mobile{display:none}}
+  </style>
+</head>
+<body>
+  <section id="loginView" class="login-wrap">
+    <div class="login">
+      <div class="brand">ASB Workforce</div>
+      <div class="sub" data-i18n="subtitle">Store Performance Management</div>
+      <div class="switch"><button id="branchMode" class="active" onclick="setLoginMode('branch')">Store Manager</button><button id="areaMode" onclick="setLoginMode('area')">Area Manager</button></div>
+      <div id="branchFields">
+        <div class="field"><label data-i18n="branchName">Branch Name</label><select id="branchName" autocomplete="organization"><option value="">Select your branch</option></select></div>
+        <div class="field"><label data-i18n="branchCode">Branch Code</label><input id="branchCode" type="password" inputmode="numeric" autocomplete="current-password" placeholder="Enter branch code"></div>
+      </div>
+      <div id="areaFields" class="hidden">
+        <div class="field"><label>Username</label><input id="areaUsername" autocomplete="username"></div>
+        <div class="field"><label>Password</label><input id="areaPassword" type="password" autocomplete="current-password"></div>
+      </div>
+      <div id="loginError" class="error"></div>
+      <button id="loginButton" class="primary" onclick="login()" data-i18n="signIn">Sign in</button>
+      <div style="text-align:right"><button class="lang" onclick="toggleLanguage()">العربية / English</button></div>
+    </div>
+    <footer class="login-footer">Developed by Ahmed Sobhy</footer>
+  </section>
+
+  <section id="appView" class="app hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="logo">ASB Workforce<small>Store Performance Management</small></div>
+      <div id="profile" class="profile"></div>
+      <nav id="nav" class="nav"></nav>
+      <div class="side-bottom"><button style="width:100%;background:#ffffff18;color:white" onclick="logout()">↪ <span data-i18n="logout">Logout</span></button></div>
+    </aside>
+    <main class="main">
+      <header class="top">
+        <div style="display:flex;align-items:center;gap:10px">
+          <button class="mobile-menu" onclick="toggleMenu()">☰</button>
+          <div><div id="pageTitle" class="title">Dashboard</div><div id="pageSub" class="muted" style="font-size:12px">Financial year · Apr 2026 – Mar 2027</div></div>
+        </div>
+        <div class="top-actions"><span id="userLabel" class="muted"></span><button class="lang" onclick="toggleLanguage()">EN / عربي</button></div>
+      </header>
+      <div id="content"></div>
+    </main>
+  </section>
+  <div id="toast" class="toast hidden"></div>
+
+<?!= include('index-script'); ?>
+</body>
+</html>

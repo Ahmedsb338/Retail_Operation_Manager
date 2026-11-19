@@ -1,0 +1,138 @@
+import express, { type NextFunction, type Request, type Response } from 'express';
+import type http from 'http';
+import path from 'path';
+import type { GoogleGenAI } from '@google/genai';
+import { DatabaseUnavailableError, type AppDatabase } from '../db/index.ts';
+import { csrfProtection } from './security/csrf.ts';
+import { attachDatabase } from './middleware/auth.ts';
+import { createAuthRouter } from './routes/authRoutes.ts';
+import { createDashboardRouter } from './routes/dashboardRoutes.ts';
+import { createScheduleRouter } from './routes/scheduleRoutes.ts';
+import { createLocalMigrationRouter } from './routes/localMigrationRoutes.ts';
+import { createAiRouter } from './routes/aiRoutes.ts';
+import { createOperationalDomainsRouter } from './routes/operationalDomainsRoutes.ts';
+import { createStaffAndWorkspaceRouter } from './routes/staffAndWorkspaceRoutes.ts';
+
+export interface CreateAppOptions {
+  getDb: () => AppDatabase;
+  isDbConfigured: () => boolean;
+  getAiClient: () => GoogleGenAI | null;
+  httpServer?: http.Server;
+  distDir?: string;
+  mountFrontend?: 'none' | 'vite' | 'static';
+}
+
+export async function createApp(options: CreateAppOptions): Promise<express.Express> {
+  const app = express();
+  app.set('trust proxy', 1);
+  app.use(express.json({ limit: '10mb' }));
+
+  // Public health endpoint (never blocks on DB outage so monitoring & UI detect DB state cleanly)
+  app.get('/api/v1/health', (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      service: 'ASB Workforce Retail Operations Backend',
+      databaseConfigured: options.isDbConfigured(),
+      geminiConfigured: Boolean(options.getAiClient()),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      service: 'ASB Workforce Retail Operations Backend',
+      databaseConfigured: options.isDbConfigured(),
+      geminiConfigured: Boolean(options.getAiClient()),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Legacy unauthenticated AI endpoint permanently disabled
+  app.post('/api/gemini/analyze', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Legacy unauthenticated endpoint disabled. Use authenticated POST /api/v1/ai/diagnostics/analyze.',
+    });
+  });
+
+  // Global CSRF + PostgreSQL availability guard for all v1 API endpoints (except health above)
+  const v1 = express.Router();
+  v1.use(csrfProtection);
+  v1.use(attachDatabase(options.getDb, options.isDbConfigured));
+
+  v1.use('/auth', createAuthRouter());
+  v1.use('/dashboard', createDashboardRouter());
+  v1.use('/store-schedule', createScheduleRouter());
+  v1.use('/migrations/local-import', createLocalMigrationRouter());
+  v1.use('/ai/diagnostics', createAiRouter(options.getAiClient));
+  v1.use('/', createOperationalDomainsRouter());
+  v1.use('/', createStaffAndWorkspaceRouter());
+
+  app.use('/api/v1', v1);
+
+  // Unknown API routes always return JSON 404
+  app.use('/api', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
+
+  if (options.mountFrontend === 'vite') {
+    const hmrSetting =
+      process.env.DISABLE_HMR === 'true'
+        ? false
+        : options.httpServer
+          ? { server: options.httpServer }
+          : false;
+
+    const vitePromise = import('vite').then(({ createServer: createViteServer }) =>
+      createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: hmrSetting,
+        },
+        appType: 'spa',
+      })
+    );
+
+    vitePromise.catch((err) => {
+      console.error('[ASB Workforce] Vite middleware failed to initialize:', err);
+    });
+
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      vitePromise
+        .then((vite) => vite.middlewares(req, res, next))
+        .catch(next);
+    });
+  } else if (options.mountFrontend === 'static' && options.distDir) {
+    app.use(express.static(options.distDir));
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(path.resolve(options.distDir!, 'index.html'));
+    });
+  }
+
+  // Global error handler
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof DatabaseUnavailableError) {
+      res.status(503).json({
+        error: err.message,
+        code: 'DATABASE_UNAVAILABLE',
+        missingVariables: err.missingVariables,
+      });
+      return;
+    }
+
+    const pgCode = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code?: unknown }).code) : '';
+    if (pgCode === '23505') {
+      res.status(409).json({ error: 'A duplicate record already exists.' });
+      return;
+    }
+    if (pgCode === '23503' || pgCode === '23514') {
+      res.status(400).json({ error: 'Record violates referential or validation constraints.' });
+      return;
+    }
+
+    console.error('Unhandled backend error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
+  });
+
+  return app;
+}

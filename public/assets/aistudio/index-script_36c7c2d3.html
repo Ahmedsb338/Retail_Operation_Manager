@@ -1,0 +1,256 @@
+<script>
+let token='', currentUser=null, currentPage='DASHBOARD', currentSheet='', currentTable=null, loginMode='branch', lang='en', navItems=[], authorizedBranches=[], areaFilterState={branchCode:'',fromDate:'',toDate:''};
+  const translations={
+    en:{subtitle:'Store Performance Management',branchName:'Branch Name',branchCode:'Branch Code',selectBranch:'Select your branch',loadingBranches:'Please wait…',branchLoadError:'Unable to load branches. Please refresh.',signIn:'Sign in',logout:'Logout',dashboard:'Dashboard',passed:'Passed Pillars',overall:'Overall Achievement',agents:'Agents',complaints:'Open Cases',pillars:'Pillars Performance',priority:'Priority Focus',agentsPerformance:'Agents Performance',addRow:'Add Row',addColumn:'Add Column',export:'Export CSV',edit:'Edit',delete:'Delete',noData:'No records yet.',readOnly:'Read-only access',save:'Save',cancel:'Cancel',storeRPM:'Store RPM',agentRPM:'Agent RPM',storeKPIs:'Store KPIs',agentsKPIs:'Agents KPIs',tnpsStore:'TNPS Store',tnpsAgents:'TNPS Agents',finalComplaints:'Final Complaints',storeSchedule:'Store Schedule',scheduleExceptions:'Schedule Exceptions',storeTasks:'Store Tasks',hrActions:'HR Actions',lateOpening:'Late Opening',shortOver:'Short & Over Cases',actionPlans:'Action Plans',reports:'Reports',month:'Month',branch:'Branch',store:'Store',storeId:'Store ID',agentName:'Agent Name',date:'Date',sid:'SID',shift:'Shift',actions:'Actions'},
+    ar:{subtitle:'نظام إدارة أداء الفروع',branchName:'اسم الفرع',branchCode:'كود الفرع',selectBranch:'اختر الفرع',loadingBranches:'يرجى الانتظار…',branchLoadError:'تعذر تحميل الفروع. يرجى تحديث الصفحة.',signIn:'تسجيل الدخول',logout:'تسجيل الخروج',dashboard:'لوحة التحكم',passed:'المؤشرات المحققة',overall:'نسبة الإنجاز الإجمالية',agents:'الموظفون',complaints:'الحالات المفتوحة',pillars:'أداء المؤشرات',priority:'أولوية التركيز',agentsPerformance:'أداء الموظفين',addRow:'إضافة صف',addColumn:'إضافة عمود',export:'تصدير CSV',edit:'تعديل',delete:'حذف',noData:'لا توجد بيانات بعد.',readOnly:'صلاحية قراءة فقط',save:'حفظ',cancel:'إلغاء',storeRPM:'أداء الفرع RPM',agentRPM:'أداء الموظفين RPM',storeKPIs:'مؤشرات الفرع',agentsKPIs:'مؤشرات الموظفين',tnpsStore:'TNPS الفرع',tnpsAgents:'TNPS الموظفين',finalComplaints:'الشكاوى النهائية',storeSchedule:'جدول الحضور والانصراف',scheduleExceptions:'استثناءات الجدول',storeTasks:'مهام الفرع',hrActions:'إجراءات الموارد البشرية',lateOpening:'التأخر في فتح الفرع',shortOver:'العجز والزيادة',actionPlans:'خطط العمل',reports:'التقارير',month:'الشهر',branch:'الفرع',store:'الفرع',storeId:'كود المتجر',agentName:'اسم الموظف',date:'التاريخ',sid:'الرقم الوظيفي',shift:'الوردية',actions:'الإجراءات'}
+  };
+  const navKeys={DASHBOARD:'dashboard',STORE_RPM:'storeRPM',AGENT_RPM:'agentRPM',STORE_KPIS:'storeKPIs',AGENT_KPIS:'agentsKPIs',TNPS_STORE:'tnpsStore',TNPS_AGENTS:'tnpsAgents',COMPLAINTS:'finalComplaints',SCHEDULES:'storeSchedule',SCHEDULE_EXCEPTIONS:'scheduleExceptions',STORE_TASKS:'storeTasks',HR_ACTIONS:'hrActions',LATE_OPENING:'lateOpening',SHORT_OVER:'shortOver',ACTION_PLANS:'actionPlans',REPORTS:'reports'};
+  const fieldKeys={'Store Name':'store','Store ID':'storeId','Agent Name':'agentName','Date':'date','SID':'sid','Shift':'shift','Month':'month','Actions':'actions'};
+  function labelText(label,key){const k=navKeys[key];return k?tr(k):label;}
+  function fieldLabel(field){return fieldKeys[field]?tr(fieldKeys[field]):field;}
+
+  const $=id=>document.getElementById(id), tr=k=>(translations[lang]||translations.en)[k]||k;
+  function toggleLanguage(){lang=lang==='en'?'ar':'en';document.documentElement.lang=lang;document.body.classList.toggle('rtl',lang==='ar');document.querySelectorAll('[data-i18n]').forEach(el=>el.textContent=tr(el.dataset.i18n));renderNav();if(currentPage==='DASHBOARD')loadDashboard();else if(currentPage==='SCHEDULES')refreshSchedule();else if(currentSheet)loadTable(currentSheet);}
+  function setLoginMode(mode){loginMode=mode;$('branchFields').classList.toggle('hidden',mode!=='branch');$('areaFields').classList.toggle('hidden',mode!=='area');$('branchMode').classList.toggle('active',mode==='branch');$('areaMode').classList.toggle('active',mode==='area');}
+  function call(name,...args){return new Promise((resolve,reject)=>google.script.run.withSuccessHandler(resolve).withFailureHandler(e=>reject(new Error(e.message||e)))[name](...args));}
+  async function loadBranchOptions(){
+    const select=$('branchName');
+    try{
+      const names=await call('getActiveBranchNames');
+      select.innerHTML=`<option value="">${tr('selectBranch')}</option>`+
+        names.map(name=>`<option value="${esc(name)}">${esc(name)}</option>`).join('');
+      if(!names.length)select.innerHTML=`<option value="">No active branches configured</option>`;
+    }catch(e){
+      select.innerHTML=`<option value="">${tr('branchLoadError')}</option>`;
+      $('loginError').textContent=e.message||tr('branchLoadError');
+    }
+  }
+  async function login(){
+    const button=$('loginButton'), original=tr('signIn');
+    if(button.disabled)return;
+    $('loginError').textContent='';
+    button.disabled=true;button.textContent=lang==='ar'?'جارٍ تسجيل الدخول…':'Signing in…';
+    try{
+      const result=loginMode==='branch'
+        ?await call('loginBranch',$('branchName').value,$('branchCode').value)
+        :await call('loginAreaManager',$('areaUsername').value,$('areaPassword').value);
+      token=result.token;currentUser=result.user;
+      button.textContent=lang==='ar'?'جارٍ تحميل البيانات…':'Loading your workspace…';
+      await openApp();
+    }catch(e){
+      $('loginError').textContent=e.message||String(e);
+      $('appView').classList.add('hidden');$('loginView').classList.remove('hidden');
+    }finally{
+      button.disabled=false;button.textContent=original;
+    }
+  }
+  async function openApp(){ $('loginView').classList.add('hidden');$('appView').classList.remove('hidden');const data=await call('getBootstrap',token);navItems=data.navigation;authorizedBranches=data.authorizedBranches||[];renderNav();$('profile').innerHTML=`<b>${esc(currentUser.username)}</b><br>${esc(currentUser.role.replace('_',' '))}<br>${esc(currentUser.branchName||currentUser.area||'')}${currentUser.storeId?'<br>Store ID: '+esc(currentUser.storeId):''}`;$('userLabel').textContent=currentUser.username;await loadDashboard();}
+  function renderNav(){ $('nav').innerHTML=navItems.map(([label,key])=>`<button class="${currentPage===key?'active':''}" onclick="navigate('${key}','${esc(label)}')">▣ <span>${esc(labelText(label,key))}</span></button>`).join('');}
+  function navigate(key,label){currentPage=key;currentSheet=key==='DASHBOARD'?'':key;$('pageTitle').textContent=labelText(label,key);$('sidebar').classList.remove('open');renderNav();if(key==='DASHBOARD')loadDashboard();else if(key==='REPORTS')renderReports();else if(key==='SCHEDULES')loadSchedule();else loadTable(key);}
+  function toggleMenu(){$('sidebar').classList.toggle('open');}
+  function areaFiltersMarkup(){
+    if(currentUser?.role!=='AREA_MANAGER')return '';
+    const branchOptions=authorizedBranches.map(b=>`<option value="${esc(b.code)}" ${areaFilterState.branchCode===b.code?'selected':''}>${esc(b.name)}</option>`).join('');
+    return `<section class="panel area-filters"><div class="panel-head"><h2>${lang==='ar'?'تصفية الفروع والتاريخ':'Branch & Date Filters'}</h2><span class="muted">${lang==='ar'?'ضمن نطاق صلاحياتك فقط':'Authorized branches only'}</span></div><div class="filter-grid"><label>${lang==='ar'?'الفرع':'Branch'}<select id="areaBranchFilter"><option value="">${lang==='ar'?'كل الفروع':'All authorized branches'}</option>${branchOptions}</select></label><label>${lang==='ar'?'من تاريخ':'From date'}<input id="areaFromFilter" type="date" value="${esc(areaFilterState.fromDate)}"></label><label>${lang==='ar'?'إلى تاريخ':'To date'}<input id="areaToFilter" type="date" value="${esc(areaFilterState.toDate)}"></label><div class="filter-actions"><button class="primary" onclick="applyAreaFilters()">${lang==='ar'?'تطبيق':'Apply filters'}</button><button class="soft" onclick="resetAreaFilters()">${lang==='ar'?'إعادة ضبط':'Reset'}</button></div></div></section>`;
+  }
+  function readAreaFilters(){
+    if(currentUser?.role!=='AREA_MANAGER')return {branchCode:'',fromDate:'',toDate:''};
+    return {branchCode:$('areaBranchFilter')?.value||'',fromDate:$('areaFromFilter')?.value||'',toDate:$('areaToFilter')?.value||''};
+  }
+  function applyAreaFilters(){areaFilterState=readAreaFilters();if(currentPage==='DASHBOARD')loadDashboard();else if(currentSheet==='SCHEDULES')refreshSchedule();else if(currentSheet)loadTable(currentSheet);}
+  function resetAreaFilters(){areaFilterState={branchCode:'',fromDate:'',toDate:''};if(currentPage==='DASHBOARD')loadDashboard();else if(currentSheet==='SCHEDULES')refreshSchedule();else if(currentSheet)loadTable(currentSheet);}
+  async function loadDashboard(){currentPage='DASHBOARD';currentSheet='';$('pageTitle').textContent=tr('dashboard');renderNav();$('content').innerHTML='<div class="empty">Loading dashboard…</div>';try{const d=await call('getDashboard',token,areaFilterState);$('content').innerHTML=`
+    ${areaFiltersMarkup()}
+    <section class="cards">
+      ${kpi(tr('passed'),`${d.passedCount} / ${d.pillarCount}`)}
+      ${kpi(tr('overall'),`${d.overall}%`)}
+      ${kpi(tr('agents'),d.agentCount)}
+      ${kpi(tr('complaints'),d.openComplaints)}
+      ${kpi('Branches',d.branchCount)}
+    </section>
+    <section class="panel"><div class="panel-head"><h2>${tr('pillars')}</h2><span class="muted">YTD · Monthly average</span></div><div class="pillars">${d.pillars.map(p=>`<div class="pillar"><b>${esc(p.pillar)}</b><strong>${p.achievement}%</strong><div class="bar"><i style="width:${Math.min(100,Math.max(0,p.achievement))}%"></i></div><small>${p.passed?'Passed':'Below target'}</small></div>`).join('')}</div></section>
+    <section class="panel"><div class="panel-head"><h2>${tr('priority')}</h2></div>${d.weakest?`<b>${esc(d.weakest.pillar)}</b> · ${d.weakest.achievement}% · ${d.weakest.passed?'Target achieved':'Needs focus'}`:'No RPM data available.'}</section>
+    <section class="panel"><div class="panel-head"><h2>${tr('agentsPerformance')}</h2></div>${renderAgentCards(d.agents)}</section>`;}catch(e){showError(e);}}
+  function kpi(label,value){return `<div class="kpi"><div class="label">${esc(label)}</div><strong>${esc(value)}</strong></div>`;}
+  function renderAgentCards(rows){if(!rows.length)return `<div class="empty">${tr('noData')}</div>`;return `<div class="table-wrap"><table><thead><tr><th>Agent</th><th>SID</th><th>Passed Boxes</th><th>Overall</th></tr></thead><tbody>${rows.map(r=>`<tr><td>${esc(r.name)}</td><td>${esc(r.sid)}</td><td>${r.passed} / 5</td><td>${r.overall}%</td></tr>`).join('')}</tbody></table></div><div class="mobile-records">${rows.map(r=>`<div class="record-card"><b>${esc(r.name)}</b><div class="record-line"><span>SID</span><span>${esc(r.sid)}</span></div><div class="record-line"><span>Passed Boxes</span><span>${r.passed} / 5</span></div><div class="record-line"><span>Overall</span><span>${r.overall}%</span></div></div>`).join('')}</div>`;}
+  async function loadTable(sheet){
+    currentSheet=sheet;currentPage=sheet;$('content').innerHTML='<div class="empty">Loading…</div>';
+    try{
+      currentTable=await call('getTable',token,sheet,areaFilterState);
+      const canEdit=currentTable.canEdit,headers=currentTable.headers,rows=currentTable.rows,store=currentTable.store||{};
+      const titleMap={STORE_RPM:'Store RPM',AGENT_RPM:'Agent RPM',STORE_KPIS:'Store KPIs',AGENT_KPIS:'Agents KPIs',TNPS_STORE:'TNPS Store',TNPS_AGENTS:'TNPS Agents',COMPLAINTS:'Final Complaints',SCHEDULE_EXCEPTIONS:'Schedule Exceptions',STORE_TASKS:'Store Tasks',HR_ACTIONS:'HR Actions',LATE_OPENING:'Late Opening',SHORT_OVER:'Short & Over Cases',ACTION_PLANS:'Action Plans'};
+      $('pageTitle').textContent=labelText(titleMap[sheet]||sheet.replaceAll('_',' '),sheet);
+      $('content').innerHTML=`${areaFiltersMarkup()}<div class="store-context"><span>Store: ${esc(store.name||'All authorized stores')}</span><span>Store ID: ${esc(store.storeId||'—')}</span></div><section class="panel"><div class="panel-head"><h2>${esc(labelText(titleMap[sheet]||sheet.replaceAll('_',' '),sheet))}</h2><div class="toolbar">${canEdit?`<button class="primary" onclick="addRow()">${tr('addRow')}</button><button class="soft" onclick="addColumn()">${tr('addColumn')}</button><button class="soft" onclick="removeColumn()">Remove Column</button><button class="soft" onclick="uploadCsv()">Upload Excel / CSV</button><input id="csvFile" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden" onchange="handleCsvUpload(event)">`:`<span class="muted">${tr('readOnly')}</span>`}<button class="soft" onclick="exportCsv()">${tr('export')}</button></div></div>${rows.length?renderTable(headers,rows,currentTable.ids,canEdit):`<div class="empty">${tr('noData')}</div>`}</section>`;
+    }catch(e){showError(e);}
+  }
+
+  const SHIFT_OPTIONS=['','AM','PM','SUP AM','SUP PM','FULL','OFF'];
+  function monthOptions(){const out=[];for(let y=2026;y<=2027;y++){const from=y===2026?4:1,to=y===2027?3:12;for(let m=from;m<=to;m++){const value=y+'-'+String(m).padStart(2,'0');out.push({value,label:new Date(y,m-1,1).toLocaleDateString(lang==='ar'?'ar-EG':'en-US',{month:'long',year:'numeric'})});}}return out;}
+  async function loadSchedule(){
+    currentPage='SCHEDULES';currentSheet='SCHEDULES';$('pageTitle').textContent=tr('storeSchedule');renderNav();
+    const now=new Date();let defaultMonth=(now.getFullYear()===2026&&now.getMonth()>=3)||(now.getFullYear()===2027&&now.getMonth()<3)?now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0'):'2026-11';
+    if(areaFilterState.fromDate)defaultMonth=areaFilterState.fromDate.slice(0,7);
+    $('content').innerHTML='<div class="empty">Loading schedule…</div>';
+    try{
+      const bootstrap=await call('getScheduleMonth',token,defaultMonth,areaFilterState.branchCode||'');
+      renderSchedule(bootstrap);
+    }catch(e){showError(e);}
+  }
+  async function refreshSchedule(){
+    const month=$('scheduleMonth').value,branch=$('scheduleBranch')?$('scheduleBranch').value:'';
+    if(currentUser?.role==='AREA_MANAGER'){
+      areaFilterState.branchCode=branch;
+      const parts=month.split('-').map(Number),last=new Date(parts[0],parts[1],0).getDate();
+      areaFilterState.fromDate=month+'-01';areaFilterState.toDate=month+'-'+String(last).padStart(2,'0');
+    }
+    try{const data=await call('getScheduleMonth',token,month,branch);renderSchedule(data);}
+    catch(e){showError(e);}
+  }
+  function renderSchedule(data){
+    const canEdit=data.canEdit,months=monthOptions();
+    const monthValue=data.month;
+    if(currentUser?.role==='AREA_MANAGER'){
+      areaFilterState.branchCode=data.selectedBranchCode||'';
+      const parts=monthValue.split('-').map(Number),last=new Date(parts[0],parts[1],0).getDate();
+      areaFilterState.fromDate=monthValue+'-01';areaFilterState.toDate=monthValue+'-'+String(last).padStart(2,'0');
+    }
+    const monthSelect=`<div class="field"><label>${tr('month')}</label><select id="scheduleMonth" onchange="refreshSchedule()">${months.map(m=>`<option value="${m.value}" ${m.value===monthValue?'selected':''}>${esc(m.label)}</option>`).join('')}</select></div>`;
+    const branchSelect=!canEdit&&data.branches.length?`<div class="field"><label>${tr('branch')}</label><select id="scheduleBranch" onchange="refreshSchedule()">${data.branches.map(b=>`<option value="${esc(b.code)}" ${b.code===data.selectedBranchCode?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div>`:'';
+    const store=data.store||{};
+    const ctx=`<div class="store-context"><span>${tr('store')}: ${esc(store.name||'Selected branch')}</span><span>${tr('storeId')}: ${esc(store.storeId||'—')}</span></div>`;
+    const agentHeaders=data.agents.map(a=>a.sid||a.name);
+    const desktop=`<div class="schedule-grid"><table><thead><tr><th>Date</th>${data.agents.map(a=>`<th>${esc(a.sid||a.name)}<br><small>${esc(a.name)}</small></th>`).join('')}</tr></thead><tbody>${data.days.map(day=>`<tr><td>${esc(day.date)}</td>${data.agents.map(a=>{const k=a.sid||a.name,v=day.shifts[k]||'';return `<td>${canEdit?`<select class="shift-select ${shiftClass(v)}" onchange="saveShift('${day.date}','${encodeURIComponent(a.name)}','${encodeURIComponent(a.sid)}',this.value)">${SHIFT_OPTIONS.map(o=>`<option value="${o}" ${o===v?'selected':''}>${o||'—'}</option>`).join('')}</select>`:`<span class="shift-pill ${shiftClass(v)}">${esc(v||'—')}</span>`}</td>`;}).join('')}</tr>`).join('')}</tbody></table></div>`;
+    const mobile=`<div class="schedule-mobile">${data.days.map(day=>`<article class="schedule-day"><h3>${esc(day.date)}</h3>${data.agents.map(a=>{const k=a.sid||a.name,v=day.shifts[k]||'';return `<div class="schedule-agent"><div><b>${esc(a.name||a.sid)}</b><small>${esc(a.sid)}</small></div>${canEdit?`<select class="shift-select ${shiftClass(v)}" onchange="saveShift('${day.date}','${encodeURIComponent(a.name)}','${encodeURIComponent(a.sid)}',this.value)">${SHIFT_OPTIONS.map(o=>`<option value="${o}" ${o===v?'selected':''}>${o||'—'}</option>`).join('')}</select>`:`<span>${esc(v||'—')}</span>`}</div>`;}).join('')}</article>`).join('')}</div>`;
+    $('content').innerHTML=`${ctx}<section class="panel"><div class="panel-head"><h2>${lang==='ar'?'جدول الحضور والانصراف':'Store Schedule'}</h2><span class="muted">${canEdit?(lang==='ar'?'قابل للتعديل':'Editable'):tr('readOnly')}</span></div><div class="schedule-controls">${monthSelect}${branchSelect}<div class="toolbar"><button class="soft" onclick="exportScheduleCsv()">${tr('export')}</button>${canEdit?'<button class="soft" onclick="uploadScheduleFile()">Upload Excel / CSV</button><input id="scheduleFile" class="hidden" type="file" accept=".xlsx,.csv" onchange="handleScheduleUpload(event)">':''}</div></div><div class="muted" style="font-size:12px;margin-bottom:10px">${lang==='ar'?'AM · PM · SUP AM · SUP PM · FULL · OFF':'Shift codes: AM · PM · SUP AM · SUP PM · FULL · OFF'}</div>${data.agents.length?desktop+mobile:'<div class="empty">Add agents to Agent RPM first to build the roster columns.</div>'}</section>`;
+    window.currentSchedule=data;
+  }
+  function shiftClass(v){return v==='AM'?'shift-AM':v==='PM'?'shift-PM':v==='FULL'?'shift-FULL':v==='OFF'?'shift-OFF':v.startsWith('SUP')?'shift-SUP':'';}
+  async function saveShift(date,nameEncoded,sidEncoded,shift){
+    const name=decodeURIComponent(nameEncoded),sid=decodeURIComponent(sidEncoded);
+    try{await call('saveScheduleCell',token,window.currentSchedule.month,date,name,sid,shift);toast(lang==='ar'?'تم حفظ الوردية':'Shift saved');}
+    catch(e){showError(e);refreshSchedule();}
+  }
+  function exportScheduleCsv(){
+    const d=window.currentSchedule;if(!d)return;
+    const heads=['Date',...d.agents.map(a=>a.sid||a.name)];
+    const rows=[heads,...d.days.map(day=>[day.date,...d.agents.map(a=>day.shifts[a.sid||a.name]||'')])];
+    const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');
+    const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Store-Schedule-'+d.month+'.csv';a.click();URL.revokeObjectURL(a.href);
+  }
+  function uploadScheduleFile(){const el=$('scheduleFile');if(el)el.click();}
+  function normalizeScheduleDate(value){
+    if(value instanceof Date&&!isNaN(value.getTime()))return value.getFullYear()+'-'+String(value.getMonth()+1).padStart(2,'0')+'-'+String(value.getDate()).padStart(2,'0');
+    const raw=String(value??'').trim();
+    if(/^\d{4}-\d{2}-\d{2}$/.test(raw))return raw;
+    const slash=raw.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+    if(slash){const day=Number(slash[1]),month=Number(slash[2]),year=Number(slash[3]);if(day>=1&&day<=31&&month>=1&&month<=12)return year+'-'+String(month).padStart(2,'0')+'-'+String(day).padStart(2,'0');}
+    if(typeof value==='number'&&value>20000&&value<80000){const d=new Date(Date.UTC(1899,11,30)+value*86400000);return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');}
+    return '';
+  }
+  async function handleScheduleUpload(event){
+    const file=event.target.files&&event.target.files[0];if(!file)return;
+    try{
+      let rows;
+      if(file.name.toLowerCase().endsWith('.xlsx')){const X=await loadXlsxLibrary(),w=X.read(await file.arrayBuffer(),{type:'array',cellDates:true});rows=X.utils.sheet_to_json(w.Sheets[w.SheetNames[0]],{header:1,raw:true,defval:''});}
+      else rows=parseCsvText(await file.text());
+      if(!rows||rows.length<2)throw new Error('Schedule file is empty.');
+      const header=rows[0].map(String),dateIndex=header.findIndex(h=>/^date$/i.test(h));
+      if(dateIndex<0)throw new Error('The first column/header must be Date.');
+      const agents=window.currentSchedule.agents,shiftCols=header.map((h,i)=>({i,agent:agents.find(a=>String(a.sid||a.name)===String(h).trim())})).filter(x=>x.agent);
+      if(!shiftCols.length)throw new Error('Employee columns must match Agent SID or Agent Name in Agent RPM.');
+      const entries=[];
+      for(const row of rows.slice(1)){
+        const date=normalizeScheduleDate(row[dateIndex]);if(!date)continue;
+        for(const col of shiftCols){const shift=String(row[col.i]||'').trim().toUpperCase();if(SHIFT_OPTIONS.includes(shift)){entries.push({date,agentName:col.agent.name,sid:col.agent.sid,shift});}}
+      }
+      const result=await call('saveScheduleGrid',token,window.currentSchedule.month,entries);
+      toast('Imported '+result.count+' schedule cells');refreshSchedule();
+    }catch(e){showError(e);}finally{event.target.value='';}
+  }
+  function renderTable(headers,rows,ids,canEdit){
+    const head=`<thead><tr>${headers.map(h=>`<th>${esc(fieldLabel(h))}</th>`).join('')}${canEdit?'<th>Actions</th>':''}</tr></thead>`;
+    const body=rows.map((r,i)=>`<tr>${headers.map(h=>`<td ${canEdit?`class="editable-cell" title="Tap to edit" onclick="editCell(${i},'${encodeURIComponent(h)}')"`:''}>${esc(r[h]??'')}${canEdit?'<small style="color:#9aa9bc"> ✎</small>':''}</td>`).join('')}${canEdit?`<td><button class="soft" onclick="editRow(${i})">Edit row</button> <button class="danger" onclick="removeRow(${i})">×</button></td>`:''}</tr>`).join('');
+    const cards=rows.map((r,i)=>`<div class="record-card">${headers.map(h=>`<div class="record-line" ${canEdit?`onclick="editCell(${i},'${encodeURIComponent(h)}')"`:''}><span>${esc(fieldLabel(h))}</span><span>${esc(r[h]??'')}${canEdit?' ✎':''}</span></div>`).join('')}${canEdit?`<div class="toolbar" style="margin-top:10px"><button class="soft" onclick="editRow(${i})">Edit row</button><button class="danger" onclick="removeRow(${i})">Delete</button></div>`:''}</div>`).join('');
+    return `<div class="table-wrap"><table>${head}<tbody>${body}</tbody></table></div><div class="mobile-records">${cards}</div>`;
+  }
+  async function editCell(i,encodedField){
+    const field=decodeURIComponent(encodedField);
+    if(field==='Store Name'||field==='Store ID'){toast(lang==='ar'?'بيانات الفرع يتم جلبها تلقائيًا ولا يمكن تعديلها هنا':'Store identity is managed in BRANCHES and cannot be edited here');return;}
+    const value=prompt('Edit '+field,currentTable.rows[i][field]??'');
+    if(value===null)return;
+    const payload={...currentTable.rows[i],[field]:value};
+    try{await call('saveRecord',token,currentSheet,currentTable.ids[i],payload);toast('Cell updated');loadTable(currentSheet);}catch(e){showError(e);}
+  }
+  async function addRow(){const payload=await promptFields(currentTable.headers,{'Store Name':currentTable.store?.name||'','Store ID':currentTable.store?.storeId||''});if(!payload)return;try{await call('saveRecord',token,currentSheet,'',payload);toast('Record added');loadTable(currentSheet);}catch(e){showError(e);}}
+  async function editRow(i){const payload=await promptFields(currentTable.headers,currentTable.rows[i]);if(!payload)return;try{await call('saveRecord',token,currentSheet,currentTable.ids[i],payload);toast('Record updated');loadTable(currentSheet);}catch(e){showError(e);}}
+  function promptFields(headers,values){return new Promise(resolve=>{const fields=headers.map(h=>`<label style="display:block;margin:9px 0;font-size:12px">${esc(fieldLabel(h))}<input data-field="${esc(h)}" value="${esc(values[h]??'')}" ${['Store Name','Store ID'].includes(h)?'disabled':''} style="display:block;width:100%;padding:9px;border:1px solid #dce5f0;border-radius:8px;margin-top:4px"></label>`).join('');const modal=document.createElement('div');modal.style='position:fixed;inset:0;background:#001a3477;z-index:50;display:grid;place-items:center;padding:15px';modal.innerHTML=`<div style="background:white;border-radius:16px;padding:18px;width:min(520px,100%);max-height:85vh;overflow:auto"><h3>Record details</h3>${fields}<div class="toolbar"><button class="primary" id="modalSave">Save</button><button class="soft" id="modalCancel">Cancel</button></div></div>`;document.body.appendChild(modal);modal.querySelector('#modalSave').onclick=()=>{const out={};modal.querySelectorAll('[data-field]').forEach(el=>out[el.dataset.field]=el.value);modal.remove();resolve(out);};modal.querySelector('#modalCancel').onclick=()=>{modal.remove();resolve(null);};});}
+  async function removeRow(i){if(!confirm('Delete this record? This cannot be undone.'))return;try{await call('deleteRecord',token,currentSheet,currentTable.ids[i]);toast('Record deleted');loadTable(currentSheet);}catch(e){showError(e);}}
+  async function addColumn(){const name=prompt('New custom column name (2–40 English letters/numbers):');if(!name)return;try{await call('addCustomField',token,currentSheet,name);toast('Column added');loadTable(currentSheet);}catch(e){showError(e);}}
+  function exportCsv(){if(!currentTable)return;const headers=currentTable.headers;const rows=[headers,...currentTable.rows.map(r=>headers.map(h=>r[h]??''))];const csv=rows.map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=currentSheet+'.csv';a.click();URL.revokeObjectURL(a.href);}
+  async function removeColumn(){
+    const name=prompt('Enter the exact custom column name to remove:');
+    if(!name)return;
+    if(!confirm('Remove custom column "'+name+'"? This removes its values from this sheet.'))return;
+    try{await call('removeCustomField',token,currentSheet,name);toast('Custom column removed');loadTable(currentSheet);}catch(e){showError(e);}
+  }
+  function uploadCsv(){const input=$('csvFile');if(input)input.click();}
+  function parseCsvText(text){
+    const rows=[];let row=[],cell='',quoted=false;
+    for(let i=0;i<text.length;i++){
+      const c=text[i],n=text[i+1];
+      if(c==='"'&&quoted&&n==='"'){cell+='"';i++;}
+      else if(c==='"'){quoted=!quoted;}
+      else if(c===','&&!quoted){row.push(cell);cell='';}
+      else if((c==='\\n'||c==='\\r')&&!quoted){if(c==='\\r'&&n==='\\n')i++;row.push(cell);if(row.some(v=>v!==''))rows.push(row);row=[];cell='';}
+      else cell+=c;
+    }
+    row.push(cell);if(row.some(v=>v!==''))rows.push(row);
+    return rows;
+  }
+  function loadXlsxLibrary(){
+    if(window.XLSX)return Promise.resolve(window.XLSX);
+    if(window._xlsxLoading)return window._xlsxLoading;
+    window._xlsxLoading=new Promise((resolve,reject)=>{
+      const script=document.createElement('script');
+      script.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';
+      script.async=true;
+      script.onload=()=>window.XLSX?resolve(window.XLSX):reject(new Error('Excel parser failed to initialize.'));
+      script.onerror=()=>reject(new Error('Could not load Excel support. Check your connection and retry.'));
+      document.head.appendChild(script);
+    });
+    return window._xlsxLoading;
+  }
+  async function handleCsvUpload(event){
+    const file=event.target.files&&event.target.files[0];if(!file)return;
+    try{
+      let parsed;
+      if(file.name.toLowerCase().endsWith('.xlsx')){
+        const XLSX=await loadXlsxLibrary();
+        const buffer=await file.arrayBuffer();
+        const workbook=XLSX.read(buffer,{type:'array',cellDates:false});
+        const firstSheet=workbook.Sheets[workbook.SheetNames[0]];
+        parsed=XLSX.utils.sheet_to_json(firstSheet,{header:1,raw:false,defval:''});
+      }else{
+        parsed=parseCsvText(await file.text());
+      }
+      if(!parsed||parsed.length<2)throw new Error('The file must contain a header row and at least one data row.');
+      const csvHeaders=parsed[0].map(h=>String(h).trim());
+      const validHeaders=currentTable.headers;
+      const unknown=csvHeaders.filter(h=>!validHeaders.includes(h));
+      if(unknown.length)throw new Error('Unknown CSV columns: '+unknown.join(', ')+'. Use exact table column names.');
+      const records=parsed.slice(1).map(values=>{
+        const obj={};csvHeaders.forEach((h,i)=>obj[h]=values[i]??'');return obj;
+      });
+      if(!confirm('Import '+records.length+' rows into '+currentSheet+'? Existing records will not be changed.'))return;
+      const result=await call('importRows',token,currentSheet,records);
+      toast(result.count+' rows imported');loadTable(currentSheet);
+    }catch(e){showError(e);}
+    finally{event.target.value='';}
+  }
+  function renderReports(){$('content').innerHTML=`<section class="panel"><h2>Reports</h2><p class="muted">Export the currently selected data table as CSV, or open a data page and use Export CSV.</p><button class="primary" onclick="navigate('STORE_RPM','Store RPM')">Open Store Performance</button></section>`;}
+  async function logout(){try{await call('logout',token);}catch(e){}token='';currentUser=null;$('appView').classList.add('hidden');$('loginView').classList.remove('hidden');$('branchCode').value='';$('areaPassword').value='';}
+  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+  function toast(msg){$('toast').textContent=msg;$('toast').classList.remove('hidden');setTimeout(()=>$('toast').classList.add('hidden'),2400);}
+  function showError(e){toast(e.message||String(e));}
+  loadBranchOptions();
+</script>

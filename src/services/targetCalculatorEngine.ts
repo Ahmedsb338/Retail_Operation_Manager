@@ -183,7 +183,7 @@ export const generateWhatsAppMessage = (params: {
   redSalesToday: string;
   redSalesTarget: string;
   overallProjectionPercent: number;
-  tnpsPercent: number;
+  tnpsPercent: number | null;
   elapsedShifts: number;
   totalShifts: number;
 }): string => {
@@ -316,7 +316,7 @@ export const generateWhatsAppMessage = (params: {
 
   // 6. Overall & TNPS
   lines.push(`Overall: ${formatPercent(overallProjectionPercent)}`);
-  lines.push(`TNPS: ${formatPercent(tnpsPercent)}`);
+  lines.push(`TNPS: ${tnpsPercent === null ? 'Unconfigured' : formatPercent(tnpsPercent)}`);
   lines.push('Thanks 🫡');
 
   return lines.join('\n');

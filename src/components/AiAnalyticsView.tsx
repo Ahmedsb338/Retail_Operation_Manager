@@ -2,20 +2,14 @@ import React from 'react';
 import { useApp } from '../context/AppContext';
 import {
   Sparkles,
-  Play,
   RotateCw,
   CheckCircle2,
-  AlertTriangle,
-  Flame,
   Clock,
   Target,
   Users,
-  ShieldAlert,
-  ArrowRight,
-  TrendingDown,
   Info,
-  Layers,
   FileCheck,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const AiAnalyticsView: React.FC = () => {
@@ -23,21 +17,28 @@ export const AiAnalyticsView: React.FC = () => {
     t,
     language,
     currentBranch,
+    geminiConfigured,
     aiAnalysis,
     isAiLoading,
+    aiError,
     runAiDiagnostic,
     toggleActionPlanItem,
   } = useApp();
 
   return (
     <div className="space-y-6">
-      {/* Top Header */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse" />
+            <span
+              className={`w-2 h-2 rounded-full ${
+                geminiConfigured ? 'bg-teal-500 animate-pulse' : 'bg-amber-500'
+              }`}
+            />
             <span className="text-[11px] font-mono font-semibold text-teal-600 dark:text-teal-400 uppercase tracking-wider">
               {t('aiModelIndicator')}
+              {currentBranch ? ` · ${currentBranch.code}` : ''}
             </span>
           </div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
@@ -50,9 +51,10 @@ export const AiAnalyticsView: React.FC = () => {
         </div>
 
         <button
+          type="button"
           onClick={runAiDiagnostic}
-          disabled={isAiLoading}
-          className="flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-700/20 transition-all active:scale-95 disabled:opacity-60 cursor-pointer self-start sm:self-auto"
+          disabled={isAiLoading || !currentBranch}
+          className="flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-700/20 transition-all active:scale-95 disabled:opacity-50 cursor-pointer self-start sm:self-auto"
         >
           {isAiLoading ? (
             <>
@@ -68,32 +70,60 @@ export const AiAnalyticsView: React.FC = () => {
         </button>
       </div>
 
-      {/* AI Grounding Rule Banner */}
+      {/* Gemini Unavailable / Diagnostic Error Banners */}
+      {!geminiConfigured && (
+        <div className="p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>
+            {language === 'ar'
+              ? 'مفتاح Gemini غير مهيأ على الخادم حالياً (GEMINI_API_KEY). سيتم إعادة خطأ 503 عند التشغيل حتى يتم ضبطه على بيئة التشغيل.'
+              : 'Server GEMINI_API_KEY is not configured. Running diagnostics will return a controlled 503 error until the server environment variable is set.'}
+          </span>
+        </div>
+      )}
+
+      {aiError && (
+        <div
+          role="alert"
+          className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-200 flex items-start gap-2.5"
+        >
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <span>{aiError}</span>
+        </div>
+      )}
+
+      {/* Grounding Rule Banner */}
       <div className="p-3.5 rounded-2xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400 flex items-start gap-3">
         <Info className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
         <div>
           <strong className="text-slate-800 dark:text-slate-200 block mb-0.5">
-            {language === 'ar' ? 'معايير النزاهة التحليلية' : 'Grounded Empirical Intelligence'}
+            {language === 'ar' ? 'معايير النزاهة التحليلية' : 'Server-Grounded Database Intelligence'}
           </strong>
           {t('aiDisclaimerNote')}
         </div>
       </div>
 
-      {/* If No Analysis Run Yet */}
+      {/* Empty Prompt State */}
       {!aiAnalysis && !isAiLoading && (
         <div className="p-10 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center max-w-lg mx-auto">
           <div className="w-12 h-12 rounded-2xl bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center mx-auto mb-3">
             <Sparkles className="w-6 h-6" />
           </div>
           <h2 className="text-base font-bold text-slate-900 dark:text-white">
-            {language === 'ar' ? 'تشخيص عمليات الفرع بذكاء الاصطناعي' : 'Run Branch Shift Diagnostic'}
+            {currentBranch
+              ? `${language === 'ar' ? 'تشخيص عمليات الفرع' : 'Run Branch Shift Diagnostic'} (${currentBranch.code})`
+              : t('noBranchesInScope')}
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-5 leading-relaxed">
-            Click the button below to parse all active financial audits, overdue tasks, team development gaps, and sales run rates into a prioritized operational action plan.
+            {language === 'ar'
+              ? 'يقوم الخادم بقراءة بيانات الفرع مباشرة من قاعدة البيانات وتوليد خطة عمل مبنية على الأدلة الفعلية.'
+              : 'The backend queries verified PostgreSQL branch records (tasks, coaching, sales boxes, complaints, late opening, short/over) and generates a grounded action plan.'}
           </p>
           <button
+            type="button"
+            disabled={!currentBranch}
             onClick={runAiDiagnostic}
-            className="px-5 py-2.5 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm inline-flex items-center gap-2 cursor-pointer"
+            className="px-5 py-2.5 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm inline-flex items-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4" />
             <span>{t('generateAiAnalysis')}</span>
@@ -113,17 +143,16 @@ export const AiAnalyticsView: React.FC = () => {
         </div>
       )}
 
-      {/* AI Intelligence Output */}
+      {/* Intelligence Output */}
       {aiAnalysis && !isAiLoading && (
         <div className="space-y-6">
-          {/* Executive Overview Banner */}
           <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-3">
               <span className="text-xs font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400">
                 A. {language === 'ar' ? 'ملخص أداء الفرع' : 'Branch Performance Synthesis'}
               </span>
               <span className="text-[10px] text-slate-400 font-mono">
-                Model: {aiAnalysis.modelUsed || 'gemini-3.8-flash'} · {new Date(aiAnalysis.generatedAt).toLocaleTimeString()}
+                {aiAnalysis.modelUsed} · {new Date(aiAnalysis.generatedAt).toLocaleString()}
               </span>
             </div>
             <p className="text-xs sm:text-sm text-slate-800 dark:text-slate-200 leading-relaxed font-medium">
@@ -133,35 +162,35 @@ export const AiAnalyticsView: React.FC = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 text-xs">
               <div>
                 <span className="font-bold text-rose-600 dark:text-rose-400 block mb-1">
-                  {language === 'ar' ? 'أبرز نقاط الضعف التشغيلية المرصودة:' : 'Identified Operational Weaknesses:'}
+                  {language === 'ar' ? 'أبرز نقاط الضعف المرصودة:' : 'Identified Operational Weaknesses:'}
                 </span>
                 <ul className="list-disc list-inside space-y-1 text-slate-600 dark:text-slate-300">
-                  {(language === 'ar' ? aiAnalysis.branchOverview.operationalWeaknessesAr : aiAnalysis.branchOverview.operationalWeaknesses).map(
-                    (w, idx) => (
-                      <li key={idx}>{w}</li>
-                    )
-                  )}
+                  {(language === 'ar'
+                    ? aiAnalysis.branchOverview.operationalWeaknessesAr
+                    : aiAnalysis.branchOverview.operationalWeaknesses
+                  ).map((w, idx) => (
+                    <li key={idx}>{w}</li>
+                  ))}
                 </ul>
               </div>
 
               <div>
                 <span className="font-bold text-teal-600 dark:text-teal-400 block mb-1">
-                  {language === 'ar' ? 'الأولويات العاجلة للمناوبة:' : 'Immediate Shift Priorities:'}
+                  {language === 'ar' ? 'الأولويات العاجلة:' : 'Immediate Shift Priorities:'}
                 </span>
                 <ul className="list-disc list-inside space-y-1 text-slate-600 dark:text-slate-300">
-                  {(language === 'ar' ? aiAnalysis.branchOverview.immediatePrioritiesAr : aiAnalysis.branchOverview.immediatePriorities).map(
-                    (p, idx) => (
-                      <li key={idx}>{p}</li>
-                    )
-                  )}
+                  {(language === 'ar'
+                    ? aiAnalysis.branchOverview.immediatePrioritiesAr
+                    : aiAnalysis.branchOverview.immediatePriorities
+                  ).map((p, idx) => (
+                    <li key={idx}>{p}</li>
+                  ))}
                 </ul>
               </div>
             </div>
           </div>
 
-          {/* 4 Pillars Grid: Ops, Team, Sales, Customer */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* B. Operations Intelligence */}
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
               <div className="flex items-center gap-2 mb-2">
                 <FileCheck className="w-4 h-4 text-teal-600" />
@@ -171,83 +200,94 @@ export const AiAnalyticsView: React.FC = () => {
               </div>
               <div className="text-xs text-slate-700 dark:text-slate-300 mb-2">
                 <strong>Status: </strong>
-                {language === 'ar' ? aiAnalysis.operationsIntelligence.auditStatusAr : aiAnalysis.operationsIntelligence.auditStatus}
+                {language === 'ar'
+                  ? aiAnalysis.operationsIntelligence.auditStatusAr
+                  : aiAnalysis.operationsIntelligence.auditStatus}
               </div>
               <ul className="text-xs space-y-1 text-slate-600 dark:text-slate-400 list-disc list-inside">
-                {(language === 'ar' ? aiAnalysis.operationsIntelligence.criticalFindingsAr : aiAnalysis.operationsIntelligence.criticalFindings).map(
-                  (f, idx) => (
-                    <li key={idx}>{f}</li>
-                  )
-                )}
+                {(language === 'ar'
+                  ? aiAnalysis.operationsIntelligence.criticalFindingsAr
+                  : aiAnalysis.operationsIntelligence.criticalFindings
+                ).map((f, idx) => (
+                  <li key={idx}>{f}</li>
+                ))}
               </ul>
             </div>
 
-            {/* C. Team Insights */}
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
               <div className="flex items-center gap-2 mb-2">
                 <Users className="w-4 h-4 text-blue-600" />
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                  C. {language === 'ar' ? 'تحليلات أداء الفريق والتوجيه' : 'Team Insights'}
+                  C. {language === 'ar' ? 'تحليلات الفريق والتوجيه' : 'Team Insights'}
                 </h3>
               </div>
               <div className="text-xs text-slate-700 dark:text-slate-300 mb-2">
                 <strong>Top Performer: </strong>
-                {language === 'ar' ? aiAnalysis.teamInsights.topPerformerAr : aiAnalysis.teamInsights.topPerformer}
+                {language === 'ar'
+                  ? aiAnalysis.teamInsights.topPerformerAr
+                  : aiAnalysis.teamInsights.topPerformer}
               </div>
-              <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
-                <div>
-                  <strong>Development Priority: </strong>
-                  {(language === 'ar' ? aiAnalysis.teamInsights.priorityCoacheesAr : aiAnalysis.teamInsights.priorityCoachees).join(', ')}
-                </div>
+              <div className="text-xs text-slate-600 dark:text-slate-400">
+                <strong>Development Priority: </strong>
+                {(language === 'ar'
+                  ? aiAnalysis.teamInsights.priorityCoacheesAr
+                  : aiAnalysis.teamInsights.priorityCoachees
+                ).join(', ')}
               </div>
             </div>
 
-            {/* D. Sales Intelligence */}
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
               <div className="flex items-center gap-2 mb-2">
                 <Target className="w-4 h-4 text-indigo-600" />
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                  D. {language === 'ar' ? 'ذكاء المبيعات وتحليل الفجوات' : 'Sales Intelligence'}
+                  D. {language === 'ar' ? 'ذكاء المبيعات' : 'Sales Intelligence'}
                 </h3>
               </div>
               <div className="text-xs text-slate-700 dark:text-slate-300 mb-1">
                 <strong>Weakest Box: </strong>
-                {language === 'ar' ? aiAnalysis.salesIntelligence.weakestBoxAr : aiAnalysis.salesIntelligence.weakestBox}
+                {language === 'ar'
+                  ? aiAnalysis.salesIntelligence.weakestBoxAr
+                  : aiAnalysis.salesIntelligence.weakestBox}
               </div>
               <div className="text-xs text-rose-600 dark:text-rose-400 font-semibold mb-2">
-                {language === 'ar' ? aiAnalysis.salesIntelligence.runRateAlertAr : aiAnalysis.salesIntelligence.runRateAlert}
+                {language === 'ar'
+                  ? aiAnalysis.salesIntelligence.runRateAlertAr
+                  : aiAnalysis.salesIntelligence.runRateAlert}
               </div>
               <ul className="text-xs space-y-1 text-slate-600 dark:text-slate-400 list-disc list-inside">
-                {(language === 'ar' ? aiAnalysis.salesIntelligence.strategicActionsAr : aiAnalysis.salesIntelligence.strategicActions).map(
-                  (s, idx) => (
-                    <li key={idx}>{s}</li>
-                  )
-                )}
+                {(language === 'ar'
+                  ? aiAnalysis.salesIntelligence.strategicActionsAr
+                  : aiAnalysis.salesIntelligence.strategicActions
+                ).map((s, idx) => (
+                  <li key={idx}>{s}</li>
+                ))}
               </ul>
             </div>
 
-            {/* E. Customer Experience Insights */}
             <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs">
               <div className="flex items-center gap-2 mb-2">
                 <Clock className="w-4 h-4 text-amber-600" />
                 <h3 className="text-xs font-bold text-slate-900 dark:text-white uppercase tracking-wider">
-                  E. {language === 'ar' ? 'رؤى تجربة العملاء والاحتكاك' : 'Customer Insights'}
+                  E. {language === 'ar' ? 'رؤى العملاء والشكاوى' : 'Customer Insights'}
                 </h3>
               </div>
               <div className="text-xs text-slate-700 dark:text-slate-300 mb-2">
-                {language === 'ar' ? aiAnalysis.customerInsights.agingSummaryAr : aiAnalysis.customerInsights.agingSummary}
+                {language === 'ar'
+                  ? aiAnalysis.customerInsights.agingSummaryAr
+                  : aiAnalysis.customerInsights.agingSummary}
               </div>
               <ul className="text-xs space-y-1 text-slate-600 dark:text-slate-400 list-disc list-inside">
-                {(language === 'ar' ? aiAnalysis.customerInsights.recurringRootCausesAr : aiAnalysis.customerInsights.recurringRootCauses).map(
-                  (r, idx) => (
-                    <li key={idx}>{r}</li>
-                  )
-                )}
+                {(language === 'ar'
+                  ? aiAnalysis.customerInsights.recurringRootCausesAr
+                  : aiAnalysis.customerInsights.recurringRootCauses
+                ).map((r, idx) => (
+                  <li key={idx}>{r}</li>
+                ))}
               </ul>
             </div>
           </div>
 
-          {/* F. AI Action Plan (Interactive Table) */}
+          {/* Interactive Action Plan Table */}
           <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 shadow-xs">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800 mb-4">
               <div className="flex items-center gap-2">
@@ -257,7 +297,8 @@ export const AiAnalyticsView: React.FC = () => {
                 </h2>
               </div>
               <span className="text-xs text-slate-400">
-                {aiAnalysis.actionPlan.filter((p) => p.isCompleted).length} / {aiAnalysis.actionPlan.length} resolved
+                {aiAnalysis.actionPlan.filter((p) => p.isCompleted).length} /{' '}
+                {aiAnalysis.actionPlan.length} resolved
               </span>
             </div>
 
@@ -284,6 +325,7 @@ export const AiAnalyticsView: React.FC = () => {
                     >
                       <td className="py-3 px-3">
                         <button
+                          type="button"
                           onClick={() => toggleActionPlanItem(item.id)}
                           className={`w-5 h-5 rounded flex items-center justify-center border transition-colors cursor-pointer ${
                             item.isCompleted

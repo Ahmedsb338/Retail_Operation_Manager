@@ -12,18 +12,39 @@ import { SalesOpportunitiesView } from './components/SalesOpportunitiesView';
 import { CustomerExperienceView } from './components/CustomerExperienceView';
 import { BranchHealthView } from './components/BranchHealthView';
 import { AiAnalyticsView } from './components/AiAnalyticsView';
-import { ReportCenterView } from './components/ReportCenterView';
 import { SettingsView } from './components/SettingsView';
+import { StoreScheduleView } from './components/domains/StoreScheduleView';
+import {
+  StoreRpmView,
+  AgentRpmView,
+  StoreKpisView,
+  AgentKpisView,
+  TnpsStoreLogsView,
+  TnpsAgentsView,
+  ScheduleExceptionsView,
+  HrActionsView,
+  LateOpeningView,
+  ShortOverView,
+  ActionPlansView,
+} from './components/domains/OperationalDomainsViews';
+import { DatabaseUnavailableBanner } from './components/DatabaseUnavailableBanner';
 
 const MainAppLayout: React.FC = () => {
-  const { isAuthenticated } = useApp();
+  const { isAuthenticated, authLoading, canEdit } = useApp();
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
 
-  // Quick Action Modal Triggers
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isCoachingModalOpen, setIsCoachingModalOpen] = useState(false);
   const [isBoxModalOpen, setIsBoxModalOpen] = useState(false);
   const [isCaseModalOpen, setIsCaseModalOpen] = useState(false);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#092d52] text-white flex items-center justify-center text-sm font-semibold">
+        ASB Workforce...
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     return <AccessPage />;
@@ -31,46 +52,30 @@ const MainAppLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors pb-16 lg:pb-0 overflow-x-hidden">
-      {/* Navigation Top Header & Desktop Sidebar & Mobile Bottom Bar */}
       <Navigation
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        onOpenQuickTask={() => setIsTaskModalOpen(true)}
-      />
+        onOpenQuickTask={
+          canEdit
+            ? () => {
+                setActiveTab('operations');
+                setIsTaskModalOpen(true);
+              }
+            : undefined
+        }
+      >
+        <main className="flex-1 p-3 sm:p-5 lg:p-6 min-w-0 content-container space-y-4">
+          <DatabaseUnavailableBanner />
 
-      {/* Main Content Area */}
-      <div className="flex-1 max-w-7xl w-full mx-auto flex flex-col content-container">
-        <main className="flex-1 p-3 sm:p-5 lg:p-6 min-w-0 content-container">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              setActiveTab={setActiveTab}
-              onOpenQuickTask={() => setIsTaskModalOpen(true)}
-              onOpenQuickCoaching={() => setIsCoachingModalOpen(true)}
-              onOpenQuickSale={() => setIsBoxModalOpen(true)}
-              onOpenQuickCase={() => setIsCaseModalOpen(true)}
-            />
-          )}
+          {activeTab === 'dashboard' && <DashboardView setActiveTab={setActiveTab} />}
+          {activeTab === 'health' && <BranchHealthView />}
+          {activeTab === 'ai' && <AiAnalyticsView />}
 
-          {activeTab === 'target_calc' && <TargetCalculatorView />}
-
-          {activeTab === 'tnps_calc' && <TnpsCalculatorView />}
-
-          {activeTab === 'staff' && <StaffRosterView />}
-
-          {activeTab === 'operations' && (
-            <OperationsView
-              isAddModalOpen={isTaskModalOpen}
-              setIsAddModalOpen={setIsTaskModalOpen}
-            />
-          )}
-
-          {activeTab === 'team' && (
-            <TeamCoachingView
-              isAddCoachingModalOpen={isCoachingModalOpen}
-              setIsAddCoachingModalOpen={setIsCoachingModalOpen}
-            />
-          )}
-
+          {activeTab === 'store-rpm' && <StoreRpmView />}
+          {activeTab === 'agent-rpm' && <AgentRpmView />}
+          {activeTab === 'store-kpis' && <StoreKpisView />}
+          {activeTab === 'agent-kpis' && <AgentKpisView />}
+          {activeTab === 'target-calc' && <TargetCalculatorView />}
           {activeTab === 'sales' && (
             <SalesOpportunitiesView
               isAddBoxModalOpen={isBoxModalOpen}
@@ -78,27 +83,43 @@ const MainAppLayout: React.FC = () => {
             />
           )}
 
-          {activeTab === 'customer' && (
+          {activeTab === 'tnps-store' && <TnpsStoreLogsView />}
+          {activeTab === 'tnps-agents' && <TnpsAgentsView />}
+          {activeTab === 'tnps-calc' && <TnpsCalculatorView />}
+          {activeTab === 'complaints' && (
             <CustomerExperienceView
               isAddCaseModalOpen={isCaseModalOpen}
               setIsAddCaseModalOpen={setIsCaseModalOpen}
             />
           )}
 
-          {activeTab === 'health' && <BranchHealthView />}
-
-          {activeTab === 'ai' && <AiAnalyticsView />}
-
-          {activeTab === 'reports' && <ReportCenterView />}
+          {activeTab === 'team' && <StaffRosterView />}
+          {activeTab === 'coaching' && (
+            <TeamCoachingView
+              isAddCoachingModalOpen={isCoachingModalOpen}
+              setIsAddCoachingModalOpen={setIsCoachingModalOpen}
+            />
+          )}
+          {activeTab === 'store-schedule' && <StoreScheduleView />}
+          {activeTab === 'schedule-exceptions' && <ScheduleExceptionsView />}
+          {activeTab === 'operations' && (
+            <OperationsView
+              isAddModalOpen={isTaskModalOpen}
+              setIsAddModalOpen={setIsTaskModalOpen}
+            />
+          )}
+          {activeTab === 'hr-actions' && <HrActionsView />}
+          {activeTab === 'late-opening' && <LateOpeningView />}
+          {activeTab === 'short-over' && <ShortOverView />}
+          {activeTab === 'action-plans' && <ActionPlansView />}
 
           {activeTab === 'settings' && <SettingsView />}
         </main>
 
-        {/* Global Footer Requested by User - Fixed Verbatim in English Regardless of Language */}
         <footer className="w-full py-3.5 text-center text-xs text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 backdrop-blur-xs no-print font-medium font-sans">
-          developed by Ahmed Sobhy ©2026
+          Developed by Ahmed Sobhy
         </footer>
-      </div>
+      </Navigation>
     </div>
   );
 };
