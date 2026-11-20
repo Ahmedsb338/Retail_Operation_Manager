@@ -4,7 +4,7 @@ import path from 'path';
 import type { GoogleGenAI } from '@google/genai';
 import { DatabaseUnavailableError, type AppDatabase } from '../db/index.ts';
 import { csrfProtection, getAllowedOrigins } from './security/csrf.ts';
-import { attachDatabase } from './middleware/auth.ts';
+import { attachDatabase, type RequestDbHandle } from './middleware/auth.ts';
 import { createAuthRouter } from './routes/authRoutes.ts';
 import { createDashboardRouter } from './routes/dashboardRoutes.ts';
 import { createScheduleRouter } from './routes/scheduleRoutes.ts';
@@ -16,10 +16,12 @@ import { createStaffAndWorkspaceRouter } from './routes/staffAndWorkspaceRoutes.
 export interface CreateAppOptions {
   getDb: () => AppDatabase;
   isDbConfigured: () => boolean;
+  acquireRequestDb?: () => RequestDbHandle;
   getAiClient: () => GoogleGenAI | null;
   httpServer?: http.Server;
   distDir?: string;
   mountFrontend?: 'none' | 'vite' | 'static';
+  mountDevFrontend?: (app: express.Express) => void;
 }
 
 export async function createApp(options: CreateAppOptions): Promise<express.Express> {
@@ -83,7 +85,7 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
   // Global CSRF + PostgreSQL availability guard for all v1 API endpoints (except health above)
   const v1 = express.Router();
   v1.use(csrfProtection);
-  v1.use(attachDatabase(options.getDb, options.isDbConfigured));
+  v1.use(attachDatabase(options.getDb, options.isDbConfigured, options.acquireRequestDb));
 
   v1.use('/auth', createAuthRouter());
   v1.use('/dashboard', createDashboardRouter());
@@ -100,33 +102,8 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
     res.status(404).json({ error: 'API endpoint not found.' });
   });
 
-  if (options.mountFrontend === 'vite') {
-    const hmrSetting =
-      process.env.DISABLE_HMR === 'true'
-        ? false
-        : options.httpServer
-          ? { server: options.httpServer }
-          : false;
-
-    const vitePromise = import('vite').then(({ createServer: createViteServer }) =>
-      createViteServer({
-        server: {
-          middlewareMode: true,
-          hmr: hmrSetting,
-        },
-        appType: 'spa',
-      })
-    );
-
-    vitePromise.catch((err) => {
-      console.error('[ASB Workforce] Vite middleware failed to initialize:', err);
-    });
-
-    app.use((req: Request, res: Response, next: NextFunction) => {
-      vitePromise
-        .then((vite) => vite.middlewares(req, res, next))
-        .catch(next);
-    });
+  if (options.mountFrontend === 'vite' && options.mountDevFrontend) {
+    options.mountDevFrontend(app);
   } else if (options.mountFrontend === 'static' && options.distDir) {
     app.use(express.static(options.distDir));
     app.get('*', (_req: Request, res: Response) => {

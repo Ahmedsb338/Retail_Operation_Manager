@@ -13,9 +13,15 @@ export interface AppRequest extends Request {
   sessionToken?: string;
 }
 
+export interface RequestDbHandle {
+  db: AppDatabase;
+  close?: () => Promise<void> | void;
+}
+
 export function attachDatabase(
   getDatabase: () => AppDatabase,
-  isConfigured: () => boolean
+  isConfigured: () => boolean,
+  acquireRequestDb?: () => RequestDbHandle
 ) {
   return (req: AppRequest, res: Response, next: NextFunction): void => {
     if (!isConfigured()) {
@@ -27,7 +33,22 @@ export function attachDatabase(
     }
 
     try {
-      req.db = getDatabase();
+      if (acquireRequestDb) {
+        const handle = acquireRequestDb();
+        req.db = handle.db;
+        if (handle.close) {
+          let closed = false;
+          const cleanup = () => {
+            if (closed) return;
+            closed = true;
+            Promise.resolve(handle.close!()).catch(() => {});
+          };
+          res.once('finish', cleanup);
+          res.once('close', cleanup);
+        }
+      } else {
+        req.db = getDatabase();
+      }
       next();
     } catch (err) {
       if (err instanceof DatabaseUnavailableError) {

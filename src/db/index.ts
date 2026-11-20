@@ -19,20 +19,34 @@ export class DatabaseUnavailableError extends Error {
   }
 }
 
-export function getMissingDatabaseEnvVars(env: NodeJS.ProcessEnv = process.env): string[] {
+export interface EnvLike {
+  [key: string]: string | undefined;
+}
+
+export function getMissingDatabaseEnvVars(env: EnvLike = process.env): string[] {
+  if (env.DATABASE_URL && String(env.DATABASE_URL).trim() !== '') {
+    return [];
+  }
   const required = ['SQL_HOST', 'SQL_DB_NAME', 'SQL_USER', 'SQL_PASSWORD'] as const;
   return required.filter((key) => !env[key] || String(env[key]).trim() === '');
 }
 
-export function isDatabaseConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+export function isDatabaseConfigured(env: EnvLike = process.env): boolean {
   return getMissingDatabaseEnvVars(env).length === 0;
 }
 
 export function resolvePgSslConfig(
-  env: NodeJS.ProcessEnv = process.env
+  env: EnvLike = process.env
 ): false | { rejectUnauthorized: boolean; ca?: string } {
   const rawSsl = String(env.SQL_SSL || '').trim().toLowerCase();
-  const host = String(env.SQL_HOST || '').trim().toLowerCase();
+  let host = String(env.SQL_HOST || '').trim().toLowerCase();
+  if (!host && env.DATABASE_URL) {
+    try {
+      host = new URL(String(env.DATABASE_URL)).hostname.toLowerCase();
+    } catch {
+      // ignore invalid URL
+    }
+  }
   const isSupabaseHost =
     host.endsWith('.supabase.co') || host.endsWith('.supabase.com');
 
@@ -65,6 +79,32 @@ export function resolvePgSslConfig(
   return false;
 }
 
+function buildPoolConfig(env: EnvLike, maxConnections: number) {
+  const ssl = resolvePgSslConfig(env);
+  if (env.DATABASE_URL && String(env.DATABASE_URL).trim() !== '') {
+    return {
+      connectionString: String(env.DATABASE_URL).trim(),
+      ...(ssl ? { ssl } : {}),
+      max: maxConnections,
+      idleTimeoutMillis: maxConnections === 1 ? 5000 : 30000,
+      connectionTimeoutMillis: 15000,
+    };
+  }
+
+  const port = env.SQL_PORT ? Number(env.SQL_PORT) : 5432;
+  return {
+    host: env.SQL_HOST,
+    port: Number.isFinite(port) && port > 0 ? port : 5432,
+    user: env.SQL_USER,
+    password: env.SQL_PASSWORD,
+    database: env.SQL_DB_NAME,
+    ssl,
+    max: maxConnections,
+    idleTimeoutMillis: maxConnections === 1 ? 5000 : 30000,
+    connectionTimeoutMillis: 15000,
+  };
+}
+
 declare global {
   var _postgresPool: Pool | undefined;
 }
@@ -76,18 +116,7 @@ export function getPostgresPool(): Pool {
   }
 
   if (!global._postgresPool) {
-    const port = process.env.SQL_PORT ? Number(process.env.SQL_PORT) : 5432;
-    global._postgresPool = new Pool({
-      host: process.env.SQL_HOST,
-      port: Number.isFinite(port) && port > 0 ? port : 5432,
-      user: process.env.SQL_USER,
-      password: process.env.SQL_PASSWORD,
-      database: process.env.SQL_DB_NAME,
-      ssl: resolvePgSslConfig(),
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 15000,
-    });
+    global._postgresPool = new Pool(buildPoolConfig(process.env, 10));
 
     global._postgresPool.on('error', (err) => {
       console.error('Unexpected PostgreSQL idle pool client error:', err);
@@ -100,4 +129,30 @@ export function getPostgresPool(): Pool {
 export function getDb(): AppDatabase {
   const pool = getPostgresPool();
   return drizzle(pool, { schema });
+}
+
+export function createRequestScopedDb(env: EnvLike): {
+  db: AppDatabase;
+  close: () => Promise<void>;
+} {
+  const missing = getMissingDatabaseEnvVars(env);
+  if (missing.length > 0) {
+    throw new DatabaseUnavailableError(missing);
+  }
+
+  const pool = new Pool(buildPoolConfig(env, 1));
+  pool.on('error', (err) => {
+    console.error('Unexpected request-scoped PostgreSQL pool error:', err);
+  });
+  const db = drizzle(pool, { schema });
+  return {
+    db,
+    close: async () => {
+      try {
+        await pool.end();
+      } catch {
+        // ignore close errors on already-ended pool
+      }
+    },
+  };
 }

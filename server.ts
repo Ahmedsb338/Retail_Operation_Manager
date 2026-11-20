@@ -49,6 +49,29 @@ async function startServer() {
     httpServer,
     distDir: path.resolve(__dirname, 'dist'),
     mountFrontend: isProduction ? 'static' : 'vite',
+    mountDevFrontend: isProduction
+      ? undefined
+      : (expressApp) => {
+          const hmrSetting =
+            process.env.DISABLE_HMR === 'true'
+              ? false
+              : { server: httpServer };
+          const vitePromise = import('vite').then(({ createServer: createViteServer }) =>
+            createViteServer({
+              server: {
+                middlewareMode: true,
+                hmr: hmrSetting,
+              },
+              appType: 'spa',
+            })
+          );
+          vitePromise.catch((err) => {
+            console.error('[ASB Workforce] Vite middleware failed to initialize:', err);
+          });
+          expressApp.use((req, res, next) => {
+            vitePromise.then((vite) => vite.middlewares(req, res, next)).catch(next);
+          });
+        },
   });
 
   httpServer.on('request', app);

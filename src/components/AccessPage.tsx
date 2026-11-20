@@ -56,10 +56,9 @@ export const AccessPage: React.FC = () => {
       if (seen.has(key)) continue;
       seen.add(key);
       const displayName = language === 'ar' ? b.nameAr || b.name : b.name;
-      const cityLabel = language === 'ar' ? b.cityAr || b.city : b.city;
       options.push({
         name: b.name,
-        label: cityLabel ? `${displayName} (${cityLabel})` : displayName,
+        label: displayName,
         isUnclaimed: false,
       });
     }
