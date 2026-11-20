@@ -29,13 +29,48 @@ export function onUnauthorizedResponse(listener: UnauthorizedListener | null) {
   unauthorizedListener = listener;
 }
 
+const RAW_API_BASE =
+  typeof import.meta !== 'undefined' &&
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL
+    ? String(
+        (import.meta as unknown as { env?: Record<string, string | undefined> }).env!
+          .VITE_API_BASE_URL
+      )
+        .trim()
+        .replace(/\/+$/, '')
+    : '';
+
+export function resolveApiUrl(path: string): string {
+  if (/^https?:\/\//i.test(path)) return path;
+  if (!RAW_API_BASE) return path;
+  return `${RAW_API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 async function parseErrorResponse(res: Response): Promise<ApiError> {
+  const contentType = String(res.headers.get('content-type') || '').toLowerCase();
   let payload: Record<string, unknown> = {};
   try {
-    payload = (await res.json()) as Record<string, unknown>;
+    if (contentType.includes('application/json')) {
+      payload = (await res.json()) as Record<string, unknown>;
+    }
   } catch {
     // Non-JSON body
   }
+
+  const isStaticHostRejection =
+    res.status === 405 ||
+    (res.status === 404 && contentType.includes('text/html'));
+
+  if (isStaticHostRejection) {
+    return new ApiError(
+      res.status === 405
+        ? 'Backend API returned 405 Method Not Allowed (this URL appears to be static hosting without the Node.js /api/v1 backend).'
+        : 'Backend API endpoint was not found (static HTML returned instead of JSON).',
+      res.status,
+      { code: 'BACKEND_UNAVAILABLE' }
+    );
+  }
+
   const message =
     typeof payload.error === 'string' && payload.error
       ? payload.error
@@ -73,12 +108,19 @@ export async function apiRequest<T>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(path, {
-    method,
-    credentials: 'include',
-    headers,
-    body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  let res: Response;
+  try {
+    res = await fetch(resolveApiUrl(path), {
+      method,
+      credentials: 'include',
+      headers,
+      body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    throw new ApiError('Unable to reach backend API server.', 503, {
+      code: 'BACKEND_UNAVAILABLE',
+    });
+  }
 
   if (!res.ok) {
     if (options?.skipAuthRedirect && res.status === 401) {
@@ -94,11 +136,26 @@ export async function apiRequest<T>(
     throw await parseErrorResponse(res);
   }
 
-  return (await res.json()) as T;
+  const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    throw new ApiError(
+      'Received non-JSON response from /api/v1 (this URL appears to be serving static frontend files without the backend server).',
+      503,
+      { code: 'BACKEND_UNAVAILABLE' }
+    );
+  }
+
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiError('Invalid JSON response from backend server.', 503, {
+      code: 'BACKEND_UNAVAILABLE',
+    });
+  }
 }
 
 export async function apiDownloadFile(url: string, fallbackFilename: string): Promise<void> {
-  const res = await fetch(url, {
+  const res = await fetch(resolveApiUrl(url), {
     method: 'GET',
     credentials: 'include',
   });

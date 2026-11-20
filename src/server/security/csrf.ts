@@ -12,11 +12,22 @@ function extractOrigin(urlValue: string | undefined): string | null {
   }
 }
 
+export function getAllowedOrigins(): Set<string> {
+  const result = new Set<string>();
+  const raw = String(process.env.ALLOWED_ORIGINS || '');
+  for (const item of raw.split(',')) {
+    const origin = extractOrigin(item.trim());
+    if (origin) result.add(origin);
+  }
+  return result;
+}
+
 /**
  * Enforces same-origin / explicit-header CSRF protection for all mutating API
  * endpoints under /api/*. Because cookies use HttpOnly + SameSite=Lax, any
  * cross-site POST/PUT/PATCH/DELETE is blocked when Origin or Referer mismatches
- * the host or when browser metadata headers indicate a cross-site request.
+ * the host or when browser metadata headers indicate a cross-site request
+ * (unless the origin is explicitly whitelisted via ALLOWED_ORIGINS).
  */
 export function csrfProtection(req: Request, res: Response, next: NextFunction): void {
   if (!MUTATING_METHODS.has(req.method.toUpperCase())) {
@@ -24,8 +35,20 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
     return;
   }
 
+  const configuredOrigins = getAllowedOrigins();
+  const origin = extractOrigin(req.headers.origin as string | undefined);
+  const refererOrigin = extractOrigin(req.headers.referer as string | undefined);
+  const isExplicitlyAllowedCrossOrigin = Boolean(
+    origin && configuredOrigins.has(origin) && req.headers['x-csrf-check'] === '1'
+  );
+
   const secFetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
-  if (secFetchSite && secFetchSite !== 'same-origin' && secFetchSite !== 'none') {
+  if (
+    secFetchSite &&
+    secFetchSite !== 'same-origin' &&
+    secFetchSite !== 'none' &&
+    !isExplicitlyAllowedCrossOrigin
+  ) {
     res.status(403).json({ error: 'Cross-site request blocked by CSRF policy.' });
     return;
   }
@@ -36,7 +59,7 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
     .trim()
     .toLowerCase();
 
-  const expectedOrigins = new Set<string>();
+  const expectedOrigins = new Set<string>(configuredOrigins);
   if (host) {
     expectedOrigins.add(`${protoHeader}://${host}`);
     expectedOrigins.add(`http://${host}`);
@@ -46,9 +69,6 @@ export function csrfProtection(req: Request, res: Response, next: NextFunction):
     const configured = extractOrigin(process.env.APP_URL);
     if (configured) expectedOrigins.add(configured);
   }
-
-  const origin = extractOrigin(req.headers.origin as string | undefined);
-  const refererOrigin = extractOrigin(req.headers.referer as string | undefined);
 
   if (origin) {
     if (!expectedOrigins.has(origin)) {

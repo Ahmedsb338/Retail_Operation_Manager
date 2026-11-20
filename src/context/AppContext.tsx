@@ -56,6 +56,8 @@ interface AppContextType {
   dataLoading: boolean;
   databaseUnavailable: boolean;
   databaseErrorMessage: string;
+  backendUnavailable: boolean;
+  backendErrorMessage: string;
   missingDbVars: string[];
   geminiConfigured: boolean;
   refreshHealth: () => Promise<void>;
@@ -359,6 +361,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [databaseUnavailable, setDatabaseUnavailable] = useState<boolean>(false);
   const [databaseErrorMessage, setDatabaseErrorMessage] = useState<string>('');
+  const [backendUnavailable, setBackendUnavailable] = useState<boolean>(false);
+  const [backendErrorMessage, setBackendErrorMessage] = useState<string>('');
   const [missingDbVars, setMissingDbVars] = useState<string[]>([]);
   const [geminiConfigured, setGeminiConfigured] = useState<boolean>(false);
 
@@ -394,6 +398,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [aiError, setAiError] = useState<string | null>(null);
 
   const handleDbError = useCallback((err: unknown): boolean => {
+    if (err instanceof ApiError && err.code === 'BACKEND_UNAVAILABLE') {
+      setBackendUnavailable(true);
+      setBackendErrorMessage(err.message);
+      return true;
+    }
     if (err instanceof ApiError && (err.status === 503 || err.code === 'DATABASE_UNAVAILABLE')) {
       setDatabaseUnavailable(true);
       setDatabaseErrorMessage(err.message);
@@ -411,6 +420,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }>('/api/v1/auth/branches', { skipAuthRedirect: true });
       setConfiguredBranches(data.configuredBranches || []);
       setUnconfiguredBranches(data.unconfiguredBranches || []);
+      setBackendUnavailable(false);
+      setBackendErrorMessage('');
       setDatabaseUnavailable(false);
     } catch (err) {
       handleDbError(err);
@@ -423,6 +434,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         databaseConfigured: boolean;
         geminiConfigured: boolean;
       }>('/api/v1/health', { skipAuthRedirect: true });
+      setBackendUnavailable(false);
+      setBackendErrorMessage('');
       setGeminiConfigured(Boolean(health.geminiConfigured));
       if (!health.databaseConfigured) {
         setDatabaseUnavailable(true);
@@ -431,10 +444,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setDatabaseErrorMessage('');
         setMissingDbVars([]);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      handleDbError(err);
     }
-  }, []);
+  }, [handleDbError]);
 
   // Register 401 listener so expired/revoked cookies immediately transition cleanly to AccessPage
   useEffect(() => {
@@ -460,6 +473,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           geminiConfigured: boolean;
         }>('/api/v1/health', { skipAuthRedirect: true });
         if (!active) return;
+        setBackendUnavailable(false);
+        setBackendErrorMessage('');
         setGeminiConfigured(Boolean(health.geminiConfigured));
         if (!health.databaseConfigured) {
           setDatabaseUnavailable(true);
@@ -1320,6 +1335,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         dataLoading,
         databaseUnavailable,
         databaseErrorMessage,
+        backendUnavailable,
+        backendErrorMessage,
         missingDbVars,
         geminiConfigured,
         refreshHealth,

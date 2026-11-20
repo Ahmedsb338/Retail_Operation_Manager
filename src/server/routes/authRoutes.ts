@@ -58,8 +58,7 @@ function isSecureRequest(req: AppRequest): boolean {
   return (
     proto.includes('https') ||
     origin.startsWith('https://') ||
-    referer.startsWith('https://') ||
-    process.env.NODE_ENV === 'production'
+    referer.startsWith('https://')
   );
 }
 

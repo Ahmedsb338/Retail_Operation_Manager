@@ -31,16 +31,19 @@ export const AccessPage: React.FC = () => {
     configuredBranches,
     unconfiguredBranches,
     databaseUnavailable,
+    backendUnavailable,
     loginBranch,
     loginArea,
   } = useApp();
 
+  const infraUnavailable = databaseUnavailable || backendUnavailable;
   const [loginMode, setLoginMode] = useState<'store' | 'area'>('store');
   const [selectedBranchName, setSelectedBranchName] = useState<string>('');
   const [branchCodeInput, setBranchCodeInput] = useState<string>('');
   const [showBranchCode, setShowBranchCode] = useState<boolean>(false);
   const [areaUsername, setAreaUsername] = useState<string>('');
   const [areaPassword, setAreaPassword] = useState<string>('');
+  const [showAreaPassword, setShowAreaPassword] = useState<boolean>(false);
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
 
@@ -231,7 +234,7 @@ export const AccessPage: React.FC = () => {
                   </div>
                   <select
                     required
-                    disabled={databaseUnavailable || branchOptions.length === 0}
+                    disabled={infraUnavailable || branchOptions.length === 0}
                     value={selectedBranchName}
                     onChange={(e) => {
                       setSelectedBranchName(e.target.value);
@@ -261,7 +264,7 @@ export const AccessPage: React.FC = () => {
                       type={showBranchCode ? 'text' : 'password'}
                       required
                       autoComplete="current-password"
-                      disabled={databaseUnavailable}
+                      disabled={infraUnavailable}
                       value={branchCodeInput}
                       onChange={(e) => setBranchCodeInput(e.target.value)}
                       placeholder={t('branchCodePlaceholder')}
@@ -294,7 +297,7 @@ export const AccessPage: React.FC = () => {
 
                 <button
                   type="submit"
-                  disabled={submitting || databaseUnavailable || branchOptions.length === 0}
+                  disabled={submitting || infraUnavailable || branchOptions.length === 0}
                   className="w-full min-h-[46px] rounded-xl bg-[#092d52] hover:bg-[#0d3b6b] disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
                 >
                   {submitting ? t('signingIn') : t('accessBtn')}
@@ -310,7 +313,7 @@ export const AccessPage: React.FC = () => {
                     type="text"
                     required
                     autoComplete="username"
-                    disabled={databaseUnavailable}
+                    disabled={infraUnavailable}
                     value={areaUsername}
                     onChange={(e) => setAreaUsername(e.target.value)}
                     placeholder={t('areaUsernamePlaceholder')}
@@ -325,15 +328,23 @@ export const AccessPage: React.FC = () => {
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-slate-400 absolute start-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
-                      type="password"
+                      type={showAreaPassword ? 'text' : 'password'}
                       required
                       autoComplete="current-password"
-                      disabled={databaseUnavailable}
+                      disabled={infraUnavailable}
                       value={areaPassword}
                       onChange={(e) => setAreaPassword(e.target.value)}
                       placeholder={t('areaPasswordPlaceholder')}
-                      className="w-full ps-10 pe-3.5 min-h-[44px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-white"
+                      className="w-full ps-10 pe-10 min-h-[44px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-white"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowAreaPassword((prev) => !prev)}
+                      className="absolute end-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      aria-label={showAreaPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showAreaPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
 
@@ -351,7 +362,7 @@ export const AccessPage: React.FC = () => {
 
                 <button
                   type="submit"
-                  disabled={submitting || databaseUnavailable}
+                  disabled={submitting || infraUnavailable}
                   className="w-full min-h-[46px] rounded-xl bg-[#092d52] hover:bg-[#0d3b6b] disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
                 >
                   {submitting ? t('signingIn') : t('accessBtn')}

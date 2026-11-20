@@ -3,7 +3,7 @@ import type http from 'http';
 import path from 'path';
 import type { GoogleGenAI } from '@google/genai';
 import { DatabaseUnavailableError, type AppDatabase } from '../db/index.ts';
-import { csrfProtection } from './security/csrf.ts';
+import { csrfProtection, getAllowedOrigins } from './security/csrf.ts';
 import { attachDatabase } from './middleware/auth.ts';
 import { createAuthRouter } from './routes/authRoutes.ts';
 import { createDashboardRouter } from './routes/dashboardRoutes.ts';
@@ -26,6 +26,31 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
   const app = express();
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '10mb' }));
+
+  // Optional credentialed CORS for explicitly whitelisted split-origin frontends
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    const originHeader = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+    if (originHeader) {
+      try {
+        const normalized = new URL(originHeader).origin.toLowerCase();
+        if (getAllowedOrigins().has(normalized)) {
+          res.setHeader('Access-Control-Allow-Origin', originHeader);
+          res.setHeader('Vary', 'Origin');
+          res.setHeader('Access-Control-Allow-Credentials', 'true');
+          res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-CSRF-Check');
+          res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+          res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+          if (req.method === 'OPTIONS') {
+            res.status(204).end();
+            return;
+          }
+        }
+      } catch {
+        // invalid Origin header ignored
+      }
+    }
+    next();
+  });
 
   // Public health endpoint (never blocks on DB outage so monitoring & UI detect DB state cleanly)
   app.get('/api/v1/health', (_req: Request, res: Response) => {

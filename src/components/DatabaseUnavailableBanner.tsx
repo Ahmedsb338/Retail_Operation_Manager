@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Database, RefreshCw, AlertTriangle, ServerOff } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const DatabaseUnavailableBanner: React.FC = () => {
@@ -8,17 +8,24 @@ export const DatabaseUnavailableBanner: React.FC = () => {
     t,
     databaseUnavailable,
     databaseErrorMessage,
+    backendUnavailable,
+    backendErrorMessage,
     missingDbVars,
     refreshHealth,
     reloadBranchesCatalog,
   } = useApp();
 
-  if (!databaseUnavailable) return null;
+  if (!databaseUnavailable && !backendUnavailable) return null;
 
   const handleRetry = async () => {
     await refreshHealth();
     await reloadBranchesCatalog();
   };
+
+  const isBackendDown = backendUnavailable;
+  const title = isBackendDown ? t('backendUnavailableTitle') : t('dbUnavailableTitle');
+  const body = isBackendDown ? t('backendUnavailableBody') : t('dbUnavailableBody');
+  const detail = isBackendDown ? backendErrorMessage : databaseErrorMessage;
 
   return (
     <div
@@ -28,22 +35,20 @@ export const DatabaseUnavailableBanner: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <div className="p-2 rounded-xl bg-rose-600 text-white shrink-0">
-            <Database className="w-5 h-5" />
+            {isBackendDown ? <ServerOff className="w-5 h-5" /> : <Database className="w-5 h-5" />}
           </div>
           <div className="space-y-1">
             <div className="flex items-center gap-2 font-bold text-sm">
               <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-              <span>{t('dbUnavailableTitle')}</span>
+              <span>{title}</span>
             </div>
-            <p className="text-xs leading-relaxed text-rose-800 dark:text-rose-200">
-              {t('dbUnavailableBody')}
-            </p>
-            {databaseErrorMessage && (
+            <p className="text-xs leading-relaxed text-rose-800 dark:text-rose-200">{body}</p>
+            {detail && (
               <p className="text-[11px] font-mono text-rose-700 dark:text-rose-300 break-all">
-                {databaseErrorMessage}
+                {detail}
               </p>
             )}
-            {missingDbVars.length > 0 && (
+            {!isBackendDown && missingDbVars.length > 0 && (
               <p className="text-[11px] font-mono text-rose-700 dark:text-rose-300">
                 {language === 'ar' ? 'المتغيرات المفقودة:' : 'Missing env vars:'}{' '}
                 {missingDbVars.join(', ')}
