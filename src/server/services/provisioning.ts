@@ -27,11 +27,8 @@ export async function provisionBranchCredential(
   if (!branchCode) {
     throw new Error('Branch Code is required.');
   }
-  if (accessCode.length < 8) {
-    throw new Error('Branch Access Code must be at least 8 characters long.');
-  }
-  if (accessCode === branchCode) {
-    throw new Error('Branch Access Code must be separate from Branch Code (never identical).');
+  if (accessCode.length < 3) {
+    throw new Error('Branch Code / Access Code must be at least 3 characters long.');
   }
 
   return db.transaction(async (tx) => {
@@ -112,6 +109,7 @@ export async function provisionAreaManager(
     displayName: string;
     password: string;
     mustRotatePassword?: boolean;
+    allowOwnerShortPassword?: boolean;
     assignments: Array<{ areaName: string; branchCode?: string | null }>;
     actorIdentifier?: string;
   }
@@ -124,8 +122,9 @@ export async function provisionAreaManager(
   if (!username || username.length < 3) {
     throw new Error('Area Manager username must be at least 3 characters.');
   }
-  if (password.length < 12) {
-    throw new Error('Area Manager password must be at least 12 characters.');
+  const minLength = params.allowOwnerShortPassword ? 4 : 12;
+  if (password.length < minLength) {
+    throw new Error(`Area Manager password must be at least ${minLength} characters.`);
   }
   if (!Array.isArray(params.assignments) || params.assignments.length === 0) {
     throw new Error('At least one explicit area or branch assignment is required.');

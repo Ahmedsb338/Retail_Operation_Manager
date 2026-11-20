@@ -28,8 +28,7 @@ import {
   validateDateRange,
 } from '../services/domainCalculations.ts';
 import {
-  parseCsvText,
-  parseXlsxBuffer,
+  parseSpreadsheetBuffer,
   serializeToUtf8Csv,
   serializeToXlsxBuffer,
   type ImportReason,
@@ -71,7 +70,8 @@ const nullableNonNegIntSchema = z.preprocess(
 const importPayloadSchema = z
   .object({
     fileBase64: z.string().optional(),
-    fileType: z.enum(['csv', 'xlsx']).optional(),
+    fileType: z.string().max(80).optional(),
+    fileName: z.string().max(260).optional(),
     rows: z.array(z.record(z.string(), z.unknown())).max(1500).optional(),
   })
   .strict();
@@ -103,12 +103,13 @@ async function parseImportRows(body: unknown): Promise<Array<Record<string, unkn
     return parsed.data.rows.map(normalizeRowKeys);
   }
 
-  if (parsed.data.fileBase64 && parsed.data.fileType) {
+  if (parsed.data.fileBase64) {
     const buf = Buffer.from(parsed.data.fileBase64, 'base64');
-    const matrix =
-      parsed.data.fileType === 'xlsx'
-        ? await parseXlsxBuffer(buf)
-        : parseCsvText(buf.toString('utf8'));
+    const matrix = await parseSpreadsheetBuffer(
+      buf,
+      parsed.data.fileType,
+      parsed.data.fileName
+    );
     if (matrix.length < 2) return [];
     const headers = matrix[0].map((h) => h.trim());
     return matrix.slice(1).map((cells) => {

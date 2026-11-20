@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import type { AppDatabase } from '../../db/index.ts';
 import {
   areaManagers,
   branchCredentials,
@@ -22,9 +23,11 @@ const loginBranchSchema = z
   .object({
     branchName: z.string().trim().min(1).max(200),
     branchCode: z.string().trim().min(1).max(60),
-    accessCode: z.string().min(1).max(200),
+    accessCode: z.string().min(1).max(200).optional(),
   })
   .strict();
+
+const CLAIM_CODE_PATTERN = /^[A-Za-z0-9_-]{3,20}$/;
 
 const loginAreaSchema = z
   .object({
@@ -50,13 +53,20 @@ const LOGIN_RATE_POLICY = {
 function isSecureRequest(req: AppRequest): boolean {
   if (req.secure) return true;
   const proto = String(req.headers['x-forwarded-proto'] || '').toLowerCase();
-  return proto.includes('https') || process.env.NODE_ENV === 'production';
+  const origin = String(req.headers.origin || '').toLowerCase();
+  const referer = String(req.headers.referer || '').toLowerCase();
+  return (
+    proto.includes('https') ||
+    origin.startsWith('https://') ||
+    referer.startsWith('https://') ||
+    process.env.NODE_ENV === 'production'
+  );
 }
 
 export function createAuthRouter(): Router {
   const router = Router();
 
-  // Public catalog: returns active branch display names (no secrets) + separate unconfigured names
+  // Public catalog: returns active branch display names (no secrets) + unconfigured branch names
   router.get('/branches', async (req: AppRequest, res, next) => {
     try {
       const db = req.db!;
@@ -91,20 +101,23 @@ export function createAuthRouter(): Router {
     }
   });
 
-  // Store Manager login: requires Branch Name + Branch Code (identifier) + separate Branch Access Code (secret)
+  // Store Manager login: Branch Name (dropdown) + Branch Code (password).
+  // For unconfigured branches, first login with a valid Branch Code atomically saves it for future logins.
   router.post('/login-branch', async (req: AppRequest, res, next) => {
     try {
       const parsed = loginBranchSchema.safeParse(req.body);
       if (!parsed.success) {
-        res.status(400).json({ error: 'Select a branch and enter both Branch Code and Branch Access Code.' });
+        res.status(400).json({ error: 'Select a branch and enter the Branch Code.' });
         return;
       }
 
       const db = req.db!;
       const ip = getClientIp(req);
-      const { branchName, branchCode, accessCode } = parsed.data;
+      const branchName = parsed.data.branchName.trim();
+      const enteredCode = parsed.data.branchCode.trim();
+      const enteredSecret = (parsed.data.accessCode ?? parsed.data.branchCode).trim();
       const rateLimiter = new DatabaseRateLimitStore(db);
-      const bucketKey = `auth:branch:${ip}:${branchCode.toLowerCase()}`;
+      const bucketKey = `auth:branch:${ip}:${branchName.toLowerCase()}`;
 
       const rateDecision = await rateLimiter.checkAndConsume(bucketKey, LOGIN_RATE_POLICY);
       if (!rateDecision.allowed) {
@@ -116,36 +129,263 @@ export function createAuthRouter(): Router {
         return;
       }
 
-      const activeBranches = await db
-        .select()
-        .from(branches)
-        .where(and(eq(branches.code, branchCode), eq(branches.isActive, true)));
+      const findActiveBranchByName = async () => {
+        const activeBranches = await db
+          .select()
+          .from(branches)
+          .where(eq(branches.isActive, true));
+        return activeBranches.find(
+          (b) => b.name.trim().toLowerCase() === branchName.toLowerCase()
+        );
+      };
 
-      const branch = activeBranches.find(
-        (b) => b.name.trim().toLowerCase() === branchName.trim().toLowerCase()
-      );
+      let branch = await findActiveBranchByName();
 
+      // If branch is in the unconfigured catalog, claim & save its Branch Code on first login
       if (!branch) {
+        const allUnconfigured = await db.select().from(unconfiguredBranches);
+        const unconfiguredRow = allUnconfigured.find(
+          (u) => u.branchName.trim().toLowerCase() === branchName.toLowerCase()
+        );
+
+        if (!unconfiguredRow) {
+          await writeAuditLog(db, {
+            actorType: 'ANONYMOUS',
+            actorRole: null,
+            actorIdentifier: branchName,
+            branchCode: enteredCode,
+            action: 'LOGIN_BRANCH_FAILED',
+            domain: 'auth',
+            details: { reason: 'branch_not_found' },
+            ipAddress: ip,
+          });
+          res.status(401).json({ error: 'Invalid branch selection or branch code.' });
+          return;
+        }
+
+        if (!CLAIM_CODE_PATTERN.test(enteredCode) || enteredSecret !== enteredCode) {
+          res.status(400).json({
+            error: 'Branch Code must be 3 to 20 alphanumeric characters (letters, numbers, - or _).',
+          });
+          return;
+        }
+
+        const now = new Date();
+        const todayIso = now.toISOString().slice(0, 10);
+
+        const claimResult = await db.transaction(async (tx) => {
+          const deleted = await tx
+            .delete(unconfiguredBranches)
+            .where(eq(unconfiguredBranches.id, unconfiguredRow.id))
+            .returning();
+
+          if (deleted.length === 0) {
+            return { status: 'concurrent_claim' as const };
+          }
+
+          const [codeOwner] = await tx
+            .select({ code: branches.code, name: branches.name })
+            .from(branches)
+            .where(eq(branches.code, enteredCode));
+
+          if (codeOwner) {
+            throw Object.assign(new Error('BRANCH_CODE_COLLISION'), { isBranchCodeCollision: true });
+          }
+
+          const [createdBranch] = await tx
+            .insert(branches)
+            .values({
+              code: enteredCode,
+              storeId: enteredCode,
+              name: unconfiguredRow.branchName,
+              nameAr: unconfiguredRow.branchName,
+              city: '',
+              cityAr: '',
+              managerName: 'Store Manager',
+              managerNameAr: 'مدير الفرع',
+              area: '',
+              businessDate: todayIso,
+              totalShifts: 25,
+              remainingShifts: 10,
+              targetDailyRevenue: 0,
+              isActive: true,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning();
+
+          const [createdCred] = await tx
+            .insert(branchCredentials)
+            .values({
+              branchCode: enteredCode,
+              codeHash: hashSecret(enteredCode),
+              isActive: true,
+              tokenVersion: 1,
+              failedAttempts: 0,
+              lastRotatedAt: now,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .returning();
+
+          await writeAuditLog(tx as unknown as AppDatabase, {
+            actorType: 'STORE_MANAGER',
+            actorRole: 'STORE_MANAGER',
+            actorIdentifier: unconfiguredRow.branchName,
+            branchCode: enteredCode,
+            action: 'CLAIM_BRANCH_ON_FIRST_LOGIN',
+            domain: 'branches',
+            recordId: enteredCode,
+            details: { branchName: unconfiguredRow.branchName },
+            ipAddress: ip,
+          });
+
+          return { status: 'claimed' as const, branch: createdBranch, cred: createdCred };
+        }).catch((err) => {
+          if (err && typeof err === 'object' && 'isBranchCodeCollision' in err) {
+            return { status: 'code_collision' as const };
+          }
+          throw err;
+        });
+
+        if (claimResult.status === 'code_collision') {
+          res.status(409).json({
+            error: 'This branch code is already assigned to another branch.',
+          });
+          return;
+        }
+
+        if (claimResult.status === 'concurrent_claim') {
+          branch = await findActiveBranchByName();
+          if (!branch) {
+            res.status(401).json({ error: 'Invalid branch selection or branch code.' });
+            return;
+          }
+        } else {
+          await rateLimiter.reset(bucketKey);
+          const sessionStore = new DatabaseSessionStore(db);
+          const { rawToken, expiresAt } = await sessionStore.createStoreManagerSession({
+            branchCode: claimResult.branch.code,
+            tokenVersion: claimResult.cred.tokenVersion,
+            ipAddress: ip,
+            userAgent: String(req.headers['user-agent'] || ''),
+          });
+          const principal = await sessionStore.validateSessionToken(rawToken);
+          await writeAuditLog(db, {
+            actorType: 'STORE_MANAGER',
+            actorRole: 'STORE_MANAGER',
+            actorIdentifier: claimResult.branch.managerName || claimResult.branch.name,
+            branchCode: claimResult.branch.code,
+            action: 'LOGIN',
+            domain: 'auth',
+            ipAddress: ip,
+          });
+          res.setHeader(
+            'Set-Cookie',
+            buildSessionCookie(rawToken, { secure: isSecureRequest(req) })
+          );
+          res.json({ user: principal, expiresAt: expiresAt.toISOString(), claimedFirstLogin: true });
+          return;
+        }
+      }
+
+      // Existing configured branch verification
+      if (enteredCode !== branch.code) {
         await writeAuditLog(db, {
           actorType: 'ANONYMOUS',
           actorRole: null,
-          actorIdentifier: branchName,
-          branchCode,
+          actorIdentifier: branch.name,
+          branchCode: branch.code,
           action: 'LOGIN_BRANCH_FAILED',
           domain: 'auth',
-          details: { reason: 'branch_not_found_or_mismatch' },
+          details: { reason: 'branch_code_mismatch' },
           ipAddress: ip,
         });
-        res.status(401).json({ error: 'Invalid branch selection, branch code, or access code.' });
+        res.status(401).json({ error: 'Invalid branch selection or branch code.' });
         return;
       }
 
-      const [cred] = await db
+      let [cred] = await db
         .select()
         .from(branchCredentials)
         .where(and(eq(branchCredentials.branchCode, branch.code), eq(branchCredentials.isActive, true)));
 
-      if (!cred || accessCode === branch.code || !verifySecret(accessCode, cred.codeHash)) {
+      // If a pre-seeded verified branch (e.g. 1750) has no credential row yet,
+      // activate it on first login with its verified branch code.
+      if (!cred) {
+        const [anyCred] = await db
+          .select()
+          .from(branchCredentials)
+          .where(eq(branchCredentials.branchCode, branch.code));
+
+        if (anyCred && !anyCred.isActive) {
+          await writeAuditLog(db, {
+            actorType: 'ANONYMOUS',
+            actorRole: null,
+            actorIdentifier: branch.name,
+            branchCode: branch.code,
+            action: 'LOGIN_BRANCH_FAILED',
+            domain: 'auth',
+            details: { reason: 'branch_credential_revoked' },
+            ipAddress: ip,
+          });
+          res.status(401).json({ error: 'Invalid branch selection or branch code.' });
+          return;
+        }
+
+        if (enteredSecret !== branch.code) {
+          await writeAuditLog(db, {
+            actorType: 'ANONYMOUS',
+            actorRole: null,
+            actorIdentifier: branch.name,
+            branchCode: branch.code,
+            action: 'LOGIN_BRANCH_FAILED',
+            domain: 'auth',
+            details: { reason: 'invalid_initial_branch_code' },
+            ipAddress: ip,
+          });
+          res.status(401).json({ error: 'Invalid branch selection or branch code.' });
+          return;
+        }
+
+        const now = new Date();
+        const [insertedCred] = await db
+          .insert(branchCredentials)
+          .values({
+            branchCode: branch.code,
+            codeHash: hashSecret(branch.code),
+            isActive: true,
+            tokenVersion: 1,
+            failedAttempts: 0,
+            lastRotatedAt: now,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing({ target: branchCredentials.branchCode })
+          .returning();
+
+        if (insertedCred) {
+          cred = insertedCred;
+          await writeAuditLog(db, {
+            actorType: 'STORE_MANAGER',
+            actorRole: 'STORE_MANAGER',
+            actorIdentifier: branch.managerName || branch.name,
+            branchCode: branch.code,
+            action: 'ACTIVATE_BRANCH_ON_FIRST_LOGIN',
+            domain: 'branch_credentials',
+            recordId: branch.code,
+            ipAddress: ip,
+          });
+        } else {
+          const [refetched] = await db
+            .select()
+            .from(branchCredentials)
+            .where(and(eq(branchCredentials.branchCode, branch.code), eq(branchCredentials.isActive, true)));
+          cred = refetched;
+        }
+      }
+
+      if (!cred || !verifySecret(enteredSecret, cred.codeHash)) {
         if (cred) {
           await db
             .update(branchCredentials)
@@ -159,10 +399,10 @@ export function createAuthRouter(): Router {
           branchCode: branch.code,
           action: 'LOGIN_BRANCH_FAILED',
           domain: 'auth',
-          details: { reason: cred ? 'invalid_access_code' : 'branch_credential_not_provisioned' },
+          details: { reason: 'invalid_branch_or_access_code' },
           ipAddress: ip,
         });
-        res.status(401).json({ error: 'Invalid branch selection, branch code, or access code.' });
+        res.status(401).json({ error: 'Invalid branch selection or branch code.' });
         return;
       }
 

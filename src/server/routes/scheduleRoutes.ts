@@ -15,8 +15,7 @@ import {
   isMonthInFiscalYear,
 } from '../services/domainCalculations.ts';
 import {
-  parseCsvText,
-  parseXlsxBuffer,
+  parseSpreadsheetBuffer,
   serializeToUtf8Csv,
   serializeToXlsxBuffer,
   type ImportReason,
@@ -58,7 +57,8 @@ const gridImportSchema = z
       .max(1500)
       .optional(),
     fileBase64: z.string().optional(),
-    fileType: z.enum(['csv', 'xlsx']).optional(),
+    fileType: z.string().max(80).optional(),
+    fileName: z.string().max(260).optional(),
   })
   .strict();
 
@@ -198,7 +198,7 @@ export function createScheduleRouter(): Router {
 
   router.get('/month', requireAuth, async (req: AppRequest, res, next) => {
     try {
-      const month = String(req.query.month || '2026-11').trim();
+      const month = String(req.query.month || new Date().toISOString().slice(0, 7)).trim();
       const branchCode = String(req.query.branchCode || '').trim();
       const result = await buildScheduleMonthPayload(req, month, branchCode);
       if ('error' in result) {
@@ -377,12 +377,13 @@ export function createScheduleRouter(): Router {
         }
 
         let entries = parsed.data.entries ?? [];
-        if (parsed.data.fileBase64 && parsed.data.fileType) {
+        if (parsed.data.fileBase64) {
           const buf = Buffer.from(parsed.data.fileBase64, 'base64');
-          const matrix =
-            parsed.data.fileType === 'xlsx'
-              ? await parseXlsxBuffer(buf)
-              : parseCsvText(buf.toString('utf8'));
+          const matrix = await parseSpreadsheetBuffer(
+            buf,
+            parsed.data.fileType,
+            parsed.data.fileName
+          );
           if (matrix.length < 2) {
             res.status(400).json({ error: 'Uploaded schedule file has no data rows.' });
             return;
@@ -565,7 +566,7 @@ export function createScheduleRouter(): Router {
 
   router.get('/export', requireAuth, async (req: AppRequest, res, next) => {
     try {
-      const month = String(req.query.month || '2026-11').trim();
+      const month = String(req.query.month || new Date().toISOString().slice(0, 7)).trim();
       const branchCode = String(req.query.branchCode || '').trim();
       const format = String(req.query.format || 'csv').toLowerCase() === 'xlsx' ? 'xlsx' : 'csv';
 

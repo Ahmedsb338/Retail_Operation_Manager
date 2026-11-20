@@ -6,6 +6,10 @@ import {
   unconfiguredBranches,
 } from './schema.ts';
 
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export const VERIFIED_BRANCH_1750 = Object.freeze({
   code: '1750',
   storeId: '1750',
@@ -16,7 +20,7 @@ export const VERIFIED_BRANCH_1750 = Object.freeze({
   managerName: 'Store Manager',
   managerNameAr: 'مدير الفرع',
   area: '',
-  businessDate: '2026-11-03',
+  businessDate: todayIsoDate(),
   totalShifts: 25,
   remainingShifts: 10,
   targetDailyRevenue: 150000,

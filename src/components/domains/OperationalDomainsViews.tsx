@@ -20,6 +20,7 @@ export const StoreRpmView: React.FC = () => (
     subtitleAr="متابعة إنجاز ركائز الفرع الشهرية والمستهدفات المحسوبة"
     endpoint="/api/v1/store-rpm"
     exportFilename="store_rpm"
+    metaField="notes"
     importHeadersHint="Month (YYYY-MM), Pillar (Gross Adds | Red & Flex | VF Cash | Fixed | Enterprise), Actual, Target, Notes"
     defaultNewValues={() => ({
       month: currentMonthIso(),
@@ -67,6 +68,7 @@ export const AgentRpmView: React.FC = () => (
     subtitleAr="متابعة أداء الموظفين عبر ركائز المبيعات والخدمة"
     endpoint="/api/v1/agent-rpm"
     exportFilename="agent_rpm"
+    metaField="notes"
     importHeadersHint="Agent Name, SID, Month (YYYY-MM), Pillar, Actual, Target, Notes"
     defaultNewValues={() => ({
       agentName: '',
@@ -119,6 +121,7 @@ export const StoreKpisView: React.FC = () => (
     subtitleAr="تتبع مؤشرات الأداء الرئيسية الشهرية للفرع"
     endpoint="/api/v1/store-kpis"
     exportFilename="store_kpis"
+    metaField="notes"
     importHeadersHint="Month (YYYY-MM), KPI Name, Actual, Target, Notes"
     defaultNewValues={() => ({
       month: currentMonthIso(),
@@ -159,6 +162,7 @@ export const AgentKpisView: React.FC = () => (
     subtitleAr="متابعة مؤشرات الأداء الفردية للموظفين"
     endpoint="/api/v1/agent-kpis"
     exportFilename="agent_kpis"
+    metaField="notes"
     importHeadersHint="Agent Name, SID, Month (YYYY-MM), KPI Name, Actual, Target, Notes"
     defaultNewValues={() => ({
       agentName: '',
@@ -204,6 +208,7 @@ export const TnpsStoreLogsView: React.FC = () => (
     subtitleAr="سجلات TNPS الشهرية ولقطات حاسبة TNPS اليومية للفرع"
     endpoint="/api/v1/tnps-store"
     exportFilename="tnps_store"
+    metaField="notes"
     importHeadersHint="Month (YYYY-MM), Business Date, Detractors, Passive, Promoters, Score, Benchmark, Notes"
     defaultNewValues={() => ({
       month: currentMonthIso(),
@@ -248,6 +253,7 @@ export const TnpsAgentsView: React.FC = () => (
     subtitleAr="بطاقات نتائج TNPS الفردية للموظفين"
     endpoint="/api/v1/tnps-agents"
     exportFilename="tnps_agents"
+    metaField="notes"
     importHeadersHint="Agent Name, SID, Month (YYYY-MM), Score, Benchmark, Notes"
     defaultNewValues={() => ({
       agentName: '',
@@ -285,6 +291,7 @@ export const ScheduleExceptionsView: React.FC = () => (
     subtitleAr="تبديل الورديات، الإجازات الطارئة، والتعديلات المعتمدة على الجدول"
     endpoint="/api/v1/schedule-exceptions"
     exportFilename="schedule_exceptions"
+    metaField="reason"
     importHeadersHint="Agent Name, Date (YYYY-MM-DD), Exception Type, Reason, Approved By"
     defaultNewValues={() => ({
       agentName: '',
@@ -318,6 +325,7 @@ export const HrActionsView: React.FC = () => (
     subtitleAr="متابعة الإنذارات، الإشعارات الإدارية، والتقدير الوظيفي"
     endpoint="/api/v1/hr-actions"
     exportFilename="hr_actions"
+    metaField="notes"
     importHeadersHint="Agent Name, Date (YYYY-MM-DD), Action, Status, Owner, Notes"
     defaultNewValues={() => ({
       agentName: '',
@@ -354,6 +362,7 @@ export const LateOpeningView: React.FC = () => (
     subtitleAr="متابعة أوقات الفتح المخططة والفعلية؛ مدة التأخير غير المدخلة تبقى غير مُعدة"
     endpoint="/api/v1/late-opening"
     exportFilename="late_opening"
+    metaField="reason"
     importHeadersHint="Date (YYYY-MM-DD), Planned Opening, Actual Opening, Delay Minutes, Responsible, Reason, Agent Name"
     defaultNewValues={() => ({
       agentName: '',
@@ -398,6 +407,7 @@ export const ShortOverView: React.FC = () => (
     subtitleAr="سجل فروق الخزينة النقدية (العجز والزيادة وصافي الفرق اليدوي)"
     endpoint="/api/v1/short-over"
     exportFilename="short_over"
+    metaField="remarks"
     importHeadersHint="Date (YYYY-MM-DD), Agent Name, Short Amount, Over Amount, Net Amount, Remarks"
     defaultNewValues={() => ({
       agentName: '',
@@ -434,6 +444,7 @@ export const ActionPlansView: React.FC = () => (
     subtitleAr="متابعة خطط العمل التصحيحية، المالكين، مواعيد الإنجاز، والقياس قبل وبعد"
     endpoint="/api/v1/action-plans"
     exportFilename="action_plans"
+    metaField="reason"
     importHeadersHint="Agent Name, Pillars, Reason, Suggested Actions, Owner, Start Date, Due Date, Status, Before Tracking, After Tracking"
     defaultNewValues={() => ({
       agentName: '',

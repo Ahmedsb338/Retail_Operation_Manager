@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ShieldCheck,
   Edit2,
@@ -6,12 +6,32 @@ import {
   X,
   Lock,
   AlertTriangle,
+  Plus,
+  LayoutGrid,
+  Table2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CaseStatus, CustomerCase } from '../types';
 import { apiDownloadFile, buildQueryParams } from '../services/apiClient';
 import { FilterBar } from './shared/FilterBar';
 import { ImportSummaryModal } from './shared/ImportSummaryModal';
+import { ExportExcelMenu, downloadXlsxSheet, type ExportFilterOptions } from './shared/ExportExcelMenu';
+import {
+  ColumnControlMenu,
+  applyColumnOrderAndVisibility,
+  applyRowControls,
+  matchesDateRange,
+  type RowSortOrder,
+} from './shared/ColumnControlMenu';
+
+const COMPLAINT_COLUMNS = [
+  { key: 'caseNumber', label: 'Complaint #', labelAr: 'رقم الشكوى' },
+  { key: 'issueCategory', label: 'Category', labelAr: 'التصنيف' },
+  { key: 'status', label: 'Status', labelAr: 'الحالة' },
+  { key: 'rootCause', label: 'Root Cause', labelAr: 'السبب الجذري' },
+  { key: 'assignedOwner', label: 'Owner', labelAr: 'المسؤول' },
+  { key: 'date', label: 'Date', labelAr: 'التاريخ' },
+];
 
 interface CustomerExperienceViewProps {
   isAddCaseModalOpen: boolean;
@@ -39,10 +59,20 @@ export const CustomerExperienceView: React.FC<CustomerExperienceViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [showImport, setShowImport] = useState(false);
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [rowLimit, setRowLimit] = useState<number>(0);
+  const [sortOrder, setSortOrder] = useState<RowSortOrder>('default');
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const [colOrder, setColOrder] = useState<string[]>(() => COMPLAINT_COLUMNS.map((c) => c.key));
   const [editingCase, setEditingCase] = useState<CustomerCase | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const visibleColumns = useMemo(
+    () => applyColumnOrderAndVisibility(COMPLAINT_COLUMNS, colOrder, hiddenCols),
+    [colOrder, hiddenCols]
+  );
 
   const today = new Date().toISOString().slice(0, 10);
   const [caseNumber, setCaseNumber] = useState('');
@@ -161,34 +191,87 @@ export const CustomerExperienceView: React.FC<CustomerExperienceViewProps> = ({
     setConfirmDeleteId(null);
   };
 
-  const handleExport = async (format: 'csv' | 'xlsx') => {
-    const qs = buildQueryParams({
-      branchCode:
-        user?.role === 'AREA_MANAGER'
-          ? selectedBranchCode || undefined
-          : user?.branchCode || undefined,
-      fromDate: dateRange.fromDate || undefined,
-      toDate: dateRange.toDate || undefined,
-      search: searchQuery || undefined,
-      format,
+  const filteredCases = useMemo(() => {
+    return cases.filter((c) => {
+      if (!matchesDateRange(c.date || c.createdAt, dateRange.fromDate, dateRange.toDate)) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const hit =
+          c.caseNumber.toLowerCase().includes(q) ||
+          c.customerIdentifier.toLowerCase().includes(q) ||
+          c.issueCategory.toLowerCase().includes(q) ||
+          c.description.toLowerCase().includes(q) ||
+          (c.agentName || '').toLowerCase().includes(q);
+        if (!hit) return false;
+      }
+      if (selectedStatus !== 'all' && c.status !== selectedStatus) return false;
+      return true;
     });
-    await apiDownloadFile(`/api/v1/complaints/export${qs}`, `complaints.${format}`);
-  };
+  }, [cases, searchQuery, selectedStatus, dateRange.fromDate, dateRange.toDate]);
 
-  const filteredCases = cases.filter((c) => {
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const hit =
+  const displayedCases = useMemo(
+    () =>
+      applyRowControls(filteredCases, rowLimit, sortOrder, (c) => c.date || c.createdAt || ''),
+    [filteredCases, rowLimit, sortOrder]
+  );
+
+  const handleFilteredExport = async (opts: ExportFilterOptions) => {
+    const isDefaultFull =
+      opts.rowScope === 'all' &&
+      opts.colScope === 'all' &&
+      !opts.searchText.trim();
+
+    if (isDefaultFull) {
+      const qs = buildQueryParams({
+        branchCode:
+          user?.role === 'AREA_MANAGER'
+            ? selectedBranchCode || undefined
+            : user?.branchCode || undefined,
+        fromDate: opts.fromDate || undefined,
+        toDate: opts.toDate || undefined,
+        format: 'xlsx',
+      });
+      await apiDownloadFile(`/api/v1/complaints/export${qs}`, 'complaints.xlsx');
+      return;
+    }
+
+    const baseList = opts.rowScope === 'all' ? cases : displayedCases;
+    const q = opts.searchText.trim().toLowerCase();
+    const exportList = baseList.filter((c) => {
+      if (!matchesDateRange(c.date || c.createdAt, opts.fromDate, opts.toDate)) {
+        return false;
+      }
+      if (opts.rowScope === 'filtered' && selectedStatus !== 'all' && c.status !== selectedStatus) {
+        return false;
+      }
+      if (!q) return true;
+      return (
         c.caseNumber.toLowerCase().includes(q) ||
         c.customerIdentifier.toLowerCase().includes(q) ||
         c.issueCategory.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
-        (c.agentName || '').toLowerCase().includes(q);
-      if (!hit) return false;
-    }
-    if (selectedStatus !== 'all' && c.status !== selectedStatus) return false;
-    return true;
-  });
+        (c.agentName || '').toLowerCase().includes(q)
+      );
+    });
+
+    const cols = opts.colScope === 'visible' ? visibleColumns : COMPLAINT_COLUMNS;
+    const sheetRows = exportList.map((c) => {
+      const out: Record<string, unknown> = { 'Store ID': c.branchCode };
+      for (const col of cols) {
+        const header = language === 'ar' ? col.labelAr || col.label : col.label;
+        if (col.key === 'caseNumber') out[header] = c.caseNumber;
+        else if (col.key === 'issueCategory') out[header] = c.issueCategory;
+        else if (col.key === 'status') out[header] = c.status;
+        else if (col.key === 'rootCause') out[header] = c.rootCause || '';
+        else if (col.key === 'assignedOwner') out[header] = c.assignedOwner || '';
+        else out[header] = c.date || c.createdAt.slice(0, 10);
+      }
+      return out;
+    });
+    await downloadXlsxSheet('complaints.xlsx', 'Complaints', sheetRows);
+  };
 
   return (
     <div className="space-y-4 content-container">
@@ -216,16 +299,22 @@ export const CustomerExperienceView: React.FC<CustomerExperienceViewProps> = ({
       <FilterBar
         search={searchQuery}
         onSearchChange={setSearchQuery}
-        onExportCsv={() => handleExport('csv')}
-        onExportXlsx={() => handleExport('xlsx')}
+        exportMenu={
+          <ExportExcelMenu
+            onExport={handleFilteredExport}
+            defaultFromDate={dateRange.fromDate}
+            defaultToDate={dateRange.toDate}
+            defaultSearchText={searchQuery}
+          />
+        }
         onOpenImport={canEdit ? () => setShowImport(true) : undefined}
         onAddNew={canEdit ? openAddModal : undefined}
-        addLabel={t('addCase')}
+        addLabel={t('addRecord')}
         extraFilters={
           <select
             value={selectedStatus}
             onChange={(e) => setSelectedStatus(e.target.value)}
-            className="px-2.5 min-h-[40px] rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+            className="px-2.5 min-h-[36px] h-[36px] rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0"
           >
             <option value="all">{t('allStatuses')}</option>
             <option value="pending">{t('pending')}</option>
@@ -234,15 +323,138 @@ export const CustomerExperienceView: React.FC<CustomerExperienceViewProps> = ({
             <option value="escalated">{t('escalated')}</option>
           </select>
         }
+        rightActions={
+          <div className="flex flex-nowrap items-center gap-1.5 shrink-0">
+            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                  viewMode === 'table'
+                    ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                    : 'text-slate-500'
+                }`}
+              >
+                <Table2 className="w-3.5 h-3.5" />
+                <span>{t('tableView')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('cards')}
+                className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                  viewMode === 'cards'
+                    ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                    : 'text-slate-500'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>{t('cardsView')}</span>
+              </button>
+            </div>
+            <ColumnControlMenu
+              columns={COMPLAINT_COLUMNS}
+              hiddenKeys={hiddenCols}
+              columnOrder={colOrder}
+              onToggleColumn={(key) =>
+                setHiddenCols((prev) =>
+                  prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+                )
+              }
+              onMoveColumn={(key, dir) => {
+                const idx = colOrder.indexOf(key);
+                const swap = dir === 'up' ? idx - 1 : idx + 1;
+                if (idx < 0 || swap < 0 || swap >= colOrder.length) return;
+                const next = [...colOrder];
+                [next[idx], next[swap]] = [next[swap], next[idx]];
+                setColOrder(next);
+              }}
+              onResetColumns={() => {
+                setHiddenCols([]);
+                setColOrder(COMPLAINT_COLUMNS.map((c) => c.key));
+              }}
+              rowLimit={rowLimit}
+              onRowLimitChange={setRowLimit}
+              sortOrder={sortOrder}
+              onSortOrderChange={setSortOrder}
+              onAddRow={canEdit ? openAddModal : undefined}
+              totalRowsCount={filteredCases.length}
+            />
+          </div>
+        }
       />
 
-      {filteredCases.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-          {language === 'ar' ? 'لا توجد شكاوى مسجلة.' : 'No complaints logged yet.'}
+      {displayedCases.length === 0 ? (
+        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3">
+          <p className="text-xs text-slate-500">
+            {language === 'ar' ? 'لا توجد شكاوى مسجلة.' : 'No complaints logged yet.'}
+          </p>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="inline-flex items-center gap-1.5 px-4 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('addRecord')}</span>
+            </button>
+          )}
+        </div>
+      ) : viewMode === 'table' ? (
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-[#092d52] text-white">
+                <tr>
+                  <th className="px-3.5 py-2.5 text-start font-semibold whitespace-nowrap">
+                    {language === 'ar' ? 'كود الفرع' : 'Store ID'}
+                  </th>
+                  {visibleColumns.map((col) => (
+                    <th key={col.key} className="px-3.5 py-2.5 text-start font-semibold whitespace-nowrap">
+                      {language === 'ar' ? col.labelAr : col.label}
+                    </th>
+                  ))}
+                  {canEdit && (
+                    <th className="px-3.5 py-2.5 text-end font-semibold whitespace-nowrap">
+                      {language === 'ar' ? 'إجراءات' : 'Actions'}
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {displayedCases.map((c) => (
+                  <tr key={c.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                    <td className="px-3.5 py-2.5 font-mono tabular-nums font-bold text-[#092d52] dark:text-teal-400">
+                      {c.branchCode}
+                    </td>
+                    {visibleColumns.map((col) => {
+                      if (col.key === 'caseNumber') return <td key={col.key} className="px-3.5 py-2.5 font-mono font-semibold">#{c.caseNumber}</td>;
+                      if (col.key === 'issueCategory') return <td key={col.key} className="px-3.5 py-2.5">{c.issueCategory}</td>;
+                      if (col.key === 'status') return <td key={col.key} className="px-3.5 py-2.5">{c.status}</td>;
+                      if (col.key === 'rootCause') return <td key={col.key} className="px-3.5 py-2.5">{c.rootCause || '—'}</td>;
+                      if (col.key === 'assignedOwner') return <td key={col.key} className="px-3.5 py-2.5">{c.assignedOwner || '—'}</td>;
+                      return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{c.date || c.createdAt.slice(0, 10)}</td>;
+                    })}
+                    {canEdit && (
+                      <td className="px-3.5 py-2.5 text-end whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          <button type="button" onClick={() => openEditModal(c)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer">
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button type="button" onClick={() => setConfirmDeleteId(c.id)} className="p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 cursor-pointer">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredCases.map((c) => (
+          {displayedCases.map((c) => (
             <div
               key={c.id}
               className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-2"
@@ -317,71 +529,72 @@ export const CustomerExperienceView: React.FC<CustomerExperienceViewProps> = ({
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveCase} className="p-5 space-y-3 overflow-y-auto text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold mb-1">{t('caseNumber')} *</label>
-                  <input
-                    required
-                    value={caseNumber}
-                    onChange={(e) => setCaseNumber(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">Date *</label>
-                  <input
-                    type="date"
-                    required
-                    value={caseDate}
-                    onChange={(e) => setCaseDate(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-                  />
-                </div>
+            <form onSubmit={handleSaveCase} className="p-5 grid grid-cols-1 gap-3 overflow-y-auto text-xs">
+              <div>
+                <label className="block font-semibold mb-1">{t('caseNumber')} *</label>
+                <input
+                  required
+                  value={caseNumber}
+                  onChange={(e) => setCaseNumber(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
+                />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold mb-1">{t('issueCategory')} *</label>
-                  <input
-                    required
-                    value={issueCategory}
-                    onChange={(e) => setIssueCategory(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">{t('caseStatus')}</label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value as CaseStatus)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  >
-                    <option value="pending">{t('pending')}</option>
-                    <option value="under_review">{t('under_review')}</option>
-                    <option value="resolved">{t('resolved')}</option>
-                    <option value="escalated">{t('escalated')}</option>
-                  </select>
-                </div>
+              <div>
+                <label className="block font-semibold mb-1">
+                  {language === 'ar' ? 'التاريخ *' : 'Date *'}
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={caseDate}
+                  onChange={(e) => setCaseDate(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
+                />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold mb-1">{t('clientIdentifier')}</label>
-                  <input
-                    value={customerIdentifier}
-                    onChange={(e) => setCustomerIdentifier(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">Assigned Owner</label>
-                  <input
-                    value={assignedOwner}
-                    onChange={(e) => setAssignedOwner(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
-                </div>
+              <div>
+                <label className="block font-semibold mb-1">{t('issueCategory')} *</label>
+                <input
+                  required
+                  value={issueCategory}
+                  onChange={(e) => setIssueCategory(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('caseStatus')}</label>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as CaseStatus)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                >
+                  <option value="pending">{t('pending')}</option>
+                  <option value="under_review">{t('under_review')}</option>
+                  <option value="resolved">{t('resolved')}</option>
+                  <option value="escalated">{t('escalated')}</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('clientIdentifier')}</label>
+                <input
+                  value={customerIdentifier}
+                  onChange={(e) => setCustomerIdentifier(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">
+                  {language === 'ar' ? 'المسؤول المكلف' : 'Assigned Owner'}
+                </label>
+                <input
+                  value={assignedOwner}
+                  onChange={(e) => setAssignedOwner(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                />
               </div>
 
               <div>

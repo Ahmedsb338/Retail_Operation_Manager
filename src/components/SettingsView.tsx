@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Globe,
   Moon,
@@ -13,12 +13,29 @@ import {
   Building2,
   LogOut,
   Lock,
+  X,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { apiRequest } from '../services/apiClient';
 import type { ImportSummary } from '../types';
+import { FilterBar } from './shared/FilterBar';
+import { ExportExcelMenu, downloadXlsxSheet, type ExportFilterOptions } from './shared/ExportExcelMenu';
+import {
+  ColumnControlMenu,
+  applyColumnOrderAndVisibility,
+  applyRowControls,
+  type RowSortOrder,
+} from './shared/ColumnControlMenu';
 
 const PILLARS = ['Gross Adds', 'Red & Flex', 'VF Cash', 'Fixed', 'Enterprise'];
+
+const SETTINGS_COLUMNS = [
+  { key: 'pillar', label: 'Strategic Pillar', labelAr: 'المحور الاستراتيجي' },
+  { key: 'target', label: 'Monthly Target', labelAr: 'المستهدف الشهري' },
+  { key: 'fyStart', label: 'FY Start', labelAr: 'بداية السنة المالية' },
+  { key: 'fyEnd', label: 'FY End', labelAr: 'نهاية السنة المالية' },
+  { key: 'branch', label: 'Branch', labelAr: 'الفرع' },
+];
 
 interface ScannedLegacyData {
   keysFound: string[];
@@ -118,7 +135,30 @@ export const SettingsView: React.FC = () => {
     saveFiscalYear,
     updateBranchProfile,
     logoutAll,
+    dateRange,
+    addTask,
   } = useApp();
+
+  // Unified Toolbar Controls & Quick Add Modal
+  const [search, setSearch] = useState('');
+  const [rowLimit, setRowLimit] = useState<number>(0);
+  const [sortOrder, setSortOrder] = useState<RowSortOrder>('default');
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const [colOrder, setColOrder] = useState<string[]>(() => SETTINGS_COLUMNS.map((c) => c.key));
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [taskSaving, setTaskSaving] = useState(false);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [goalForm, setGoalForm] = useState({
+    title: '',
+    owner: currentBranch?.manager || '',
+    date: new Date().toISOString().slice(0, 10),
+    notes: '',
+  });
+
+  const visibleColumns = useMemo(
+    () => applyColumnOrderAndVisibility(SETTINGS_COLUMNS, colOrder, hiddenCols),
+    [colOrder, hiddenCols]
+  );
 
   // Fiscal Year State
   const [fyStart, setFyStart] = useState(fiscalYear.startDate);
@@ -293,27 +333,155 @@ export const SettingsView: React.FC = () => {
     }
   };
 
-  return (
-    <div className="space-y-6 content-container">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            {t('settingsTitle')}
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {t('settingsSubtitle')}
-          </p>
-        </div>
+  const filteredPillars = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = !q ? PILLARS : PILLARS.filter((p) => p.toLowerCase().includes(q));
+    return applyRowControls(list, rowLimit, sortOrder);
+  }, [search, rowLimit, sortOrder]);
 
-        <button
-          type="button"
-          onClick={logoutAll}
-          className="inline-flex items-center gap-1.5 px-3.5 min-h-[38px] rounded-xl text-xs font-bold bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 cursor-pointer self-start"
-        >
-          <LogOut className="w-3.5 h-3.5" />
-          <span>{t('logoutAll')}</span>
-        </button>
+  const handleFilteredExport = async (opts: ExportFilterOptions) => {
+    const baseList = opts.rowScope === 'all' ? PILLARS : filteredPillars;
+    const q = opts.searchText.trim().toLowerCase();
+    const list = baseList.filter((p) => !q || p.toLowerCase().includes(q));
+    const cols = opts.colScope === 'visible' ? visibleColumns : SETTINGS_COLUMNS;
+    const rows = list.map((p) => {
+      const out: Record<string, unknown> = {
+        Manager: managerName || currentBranch?.manager || '',
+        BusinessDate: businessDate || currentBranch?.businessDate || '',
+        Period: opts.fromDate || opts.toDate ? `${opts.fromDate || '...'} -> ${opts.toDate || '...'}` : 'Fiscal Year',
+      };
+      for (const col of cols) {
+        const header = language === 'ar' ? col.labelAr : col.label;
+        if (col.key === 'pillar') out[header] = p;
+        else if (col.key === 'target') out[header] = targetInputs[p] || t('unconfiguredLabel');
+        else if (col.key === 'fyStart') out[header] = fyStart;
+        else if (col.key === 'fyEnd') out[header] = fyEnd;
+        else if (col.key === 'branch') out[header] = currentBranch?.code || '';
+      }
+      return out;
+    });
+    await downloadXlsxSheet(
+      `branch_settings_${currentBranch?.code || 'config'}.xlsx`,
+      'Settings',
+      rows
+    );
+  };
+
+  const openAddGoalModal = () => {
+    setGoalForm({
+      title: '',
+      owner: currentBranch?.manager || '',
+      date: new Date().toISOString().slice(0, 10),
+      notes: '',
+    });
+    setShowAddModal(true);
+  };
+
+  const handleSaveGoalRecord = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEdit || !goalForm.title.trim()) return;
+    setTaskSaving(true);
+    try {
+      await addTask({
+        title: goalForm.title.trim(),
+        titleAr: goalForm.title.trim(),
+        description: goalForm.notes.trim() || goalForm.title.trim(),
+        descriptionAr: goalForm.notes.trim() || goalForm.title.trim(),
+        category: 'financial',
+        subcategory: 'fiscal_milestone',
+        owner: goalForm.owner.trim() || currentBranch?.manager || 'Store Manager',
+        ownerRole: 'Store Manager',
+        deadline: goalForm.date,
+        dueDate: goalForm.date,
+        date: goalForm.date,
+        priority: 'medium',
+        status: 'not_started',
+        notes: goalForm.notes.trim(),
+        evidenceText: '',
+      });
+      setShowAddModal(false);
+      setToastMsg(language === 'ar' ? 'تم حفظ السجل بنجاح' : 'Fiscal governance milestone saved');
+      setTimeout(() => setToastMsg(null), 3000);
+    } finally {
+      setTaskSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 content-container">
+      {toastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-600 text-white shadow-xl flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4" />
+          <span>{toastMsg}</span>
+        </div>
+      )}
+
+      <div className="pb-2 border-b border-slate-200 dark:border-slate-800">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+          {t('settingsTitle')}
+        </h1>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+          {t('settingsSubtitle')}
+        </p>
       </div>
+
+      {/* Single-Row Unified Toolbar */}
+      <FilterBar
+        search={search}
+        onSearchChange={setSearch}
+        showDateFilters
+        exportMenu={
+          <ExportExcelMenu
+            onExport={handleFilteredExport}
+            defaultFromDate={dateRange.fromDate}
+            defaultToDate={dateRange.toDate}
+            defaultSearchText={search}
+          />
+        }
+        onAddNew={canEdit ? openAddGoalModal : undefined}
+        addLabel={t('addRecord')}
+        rightActions={
+          <div className="flex flex-nowrap items-center gap-1.5 shrink-0">
+            <ColumnControlMenu
+              columns={SETTINGS_COLUMNS}
+              hiddenKeys={hiddenCols}
+              columnOrder={colOrder}
+              onToggleColumn={(key) =>
+                setHiddenCols((prev) =>
+                  prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+                )
+              }
+              onMoveColumn={(key, dir) => {
+                const idx = colOrder.indexOf(key);
+                const swap = dir === 'up' ? idx - 1 : idx + 1;
+                if (idx < 0 || swap < 0 || swap >= colOrder.length) return;
+                const next = [...colOrder];
+                [next[idx], next[swap]] = [next[swap], next[idx]];
+                setColOrder(next);
+              }}
+              onResetColumns={() => {
+                setHiddenCols([]);
+                setColOrder(SETTINGS_COLUMNS.map((c) => c.key));
+              }}
+              rowLimit={rowLimit}
+              onRowLimitChange={setRowLimit}
+              sortOrder={sortOrder}
+              onSortOrderChange={setSortOrder}
+              onAddRow={canEdit ? openAddGoalModal : undefined}
+              totalRowsCount={filteredPillars.length}
+            />
+
+            <button
+              type="button"
+              onClick={logoutAll}
+              className="inline-flex items-center gap-1.5 px-3.5 min-h-[36px] h-[36px] rounded-xl text-xs font-bold bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-900 cursor-pointer whitespace-nowrap shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>{t('logoutAll')}</span>
+            </button>
+          </div>
+        }
+      />
 
       {/* Language & Theme */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -397,7 +565,7 @@ export const SettingsView: React.FC = () => {
           {!canEdit && <Lock className="w-4 h-4 text-slate-400" />}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+        <div className="grid grid-cols-1 gap-3 text-xs">
           <div>
             <label className="block font-semibold text-slate-600 dark:text-slate-300 mb-1">
               {t('fiscalYearStartLabel')}
@@ -407,7 +575,7 @@ export const SettingsView: React.FC = () => {
               disabled={!canEdit}
               value={fyStart}
               onChange={(e) => setFyStart(e.target.value)}
-              className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+              className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
             />
           </div>
           <div>
@@ -419,13 +587,10 @@ export const SettingsView: React.FC = () => {
               disabled={!canEdit}
               value={fyEnd}
               onChange={(e) => setFyEnd(e.target.value)}
-              className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+              className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
             />
           </div>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
-          {PILLARS.map((p) => (
+          {filteredPillars.map((p) => (
             <div key={p}>
               <label className="block font-semibold text-slate-600 dark:text-slate-300 mb-1 truncate">
                 {p}
@@ -437,7 +602,7 @@ export const SettingsView: React.FC = () => {
                 value={targetInputs[p] ?? ''}
                 onChange={(e) => setTargetInputs({ ...targetInputs, [p]: e.target.value })}
                 placeholder={t('unconfiguredLabel')}
-                className="w-full px-2.5 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
               />
             </div>
           ))}
@@ -469,7 +634,7 @@ export const SettingsView: React.FC = () => {
             </span>
           </h3>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div className="grid grid-cols-1 gap-3 text-xs">
             <div>
               <label className="block font-semibold text-slate-600 dark:text-slate-300 mb-1">
                 {t('branchManager')}
@@ -478,7 +643,7 @@ export const SettingsView: React.FC = () => {
                 type="text"
                 value={managerName}
                 onChange={(e) => setManagerName(e.target.value)}
-                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
               />
             </div>
             <div>
@@ -489,7 +654,7 @@ export const SettingsView: React.FC = () => {
                 type="date"
                 value={businessDate}
                 onChange={(e) => setBusinessDate(e.target.value)}
-                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono text-slate-900 dark:text-white"
               />
             </div>
           </div>
@@ -517,33 +682,48 @@ export const SettingsView: React.FC = () => {
             <span>{t('changePasswordTitle')}</span>
           </h3>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            <input
-              type="password"
-              required
-              placeholder="Current password"
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-              className="px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-            />
-            <input
-              type="password"
-              required
-              minLength={12}
-              placeholder="New password (min 12 chars)"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-            />
-            <input
-              type="password"
-              required
-              minLength={12}
-              placeholder="Confirm new password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-            />
+          <div className="grid grid-cols-1 gap-3 text-xs">
+            <div>
+              <label className="block font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                {language === 'ar' ? 'كلمة المرور الحالية' : 'Current password'}
+              </label>
+              <input
+                type="password"
+                required
+                placeholder="••••••••"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                {language === 'ar' ? 'كلمة المرور الجديدة (12 حرف على الأقل)' : 'New password (min 12 chars)'}
+              </label>
+              <input
+                type="password"
+                required
+                minLength={12}
+                placeholder="••••••••"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-slate-600 dark:text-slate-300 mb-1">
+                {language === 'ar' ? 'تأكيد كلمة المرور الجديدة' : 'Confirm new password'}
+              </label>
+              <input
+                type="password"
+                required
+                minLength={12}
+                placeholder="••••••••"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white"
+              />
+            </div>
           </div>
 
           {pwdMsg && (
@@ -678,6 +858,87 @@ export const SettingsView: React.FC = () => {
         <p>{t('architectureSummaryBody')}</p>
         <p className="text-[11px] font-mono text-slate-400 pt-1">{t('versionInfo')}</p>
       </div>
+
+      {/* Add Governance / Fiscal Milestone Modal (Strict 1-Column Inputs) */}
+      {canEdit && showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-4">
+          <form
+            onSubmit={handleSaveGoalRecord}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
+          >
+            <div className="px-5 py-3.5 bg-[#092d52] text-white flex items-center justify-between">
+              <h3 className="text-sm font-bold">{t('addRecord')}</h3>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 rounded-lg hover:bg-white/10 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 grid grid-cols-1 gap-3 text-xs overflow-y-auto">
+              <div>
+                <label className="block font-semibold mb-1">{t('taskTitle')} *</label>
+                <input
+                  type="text"
+                  required
+                  value={goalForm.title}
+                  onChange={(e) => setGoalForm((p) => ({ ...p, title: e.target.value }))}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('taskOwner')}</label>
+                <input
+                  type="text"
+                  value={goalForm.owner}
+                  onChange={(e) => setGoalForm((p) => ({ ...p, owner: e.target.value }))}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('businessDate')}</label>
+                <input
+                  type="date"
+                  value={goalForm.date}
+                  onChange={(e) => setGoalForm((p) => ({ ...p, date: e.target.value }))}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('taskNotes')}</label>
+                <textarea
+                  rows={2}
+                  value={goalForm.notes}
+                  onChange={(e) => setGoalForm((p) => ({ ...p, notes: e.target.value }))}
+                  className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-3 bg-slate-50 dark:bg-slate-950 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="px-3.5 min-h-[38px] rounded-xl text-xs bg-slate-100 dark:bg-slate-800 cursor-pointer"
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="submit"
+                disabled={taskSaving}
+                className="px-4 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer disabled:opacity-50"
+              >
+                {taskSaving ? '...' : t('saveRecord')}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

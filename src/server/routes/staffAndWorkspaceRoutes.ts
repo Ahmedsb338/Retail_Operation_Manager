@@ -17,8 +17,7 @@ import {
   PILLARS,
 } from '../services/domainCalculations.ts';
 import {
-  parseCsvText,
-  parseXlsxBuffer,
+  parseSpreadsheetBuffer,
   serializeToUtf8Csv,
   serializeToXlsxBuffer,
   type ImportReason,
@@ -434,7 +433,8 @@ export function createStaffAndWorkspaceRouter(): Router {
   staffRouter.post('/import', requireAuth, requireStoreManager, async (req: AppRequest, res, next) => {
     try {
       const fileBase64 = String(req.body?.fileBase64 || '');
-      const fileType = req.body?.fileType === 'xlsx' ? 'xlsx' : 'csv';
+      const fileType = req.body?.fileType ? String(req.body.fileType) : undefined;
+      const fileName = req.body?.fileName ? String(req.body.fileName) : undefined;
       const rawRowsInput = Array.isArray(req.body?.rows) ? req.body.rows : null;
 
       let parsedObjects: Array<Record<string, unknown>> = [];
@@ -442,8 +442,7 @@ export function createStaffAndWorkspaceRouter(): Router {
         parsedObjects = rawRowsInput;
       } else if (fileBase64) {
         const buf = Buffer.from(fileBase64, 'base64');
-        const matrix =
-          fileType === 'xlsx' ? await parseXlsxBuffer(buf) : parseCsvText(buf.toString('utf8'));
+        const matrix = await parseSpreadsheetBuffer(buf, fileType, fileName);
         if (matrix.length >= 2) {
           const headers = matrix[0].map((h) => h.trim());
           parsedObjects = matrix.slice(1).map((cells) => {

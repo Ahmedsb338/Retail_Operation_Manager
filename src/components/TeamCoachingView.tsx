@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { Employee, CoachingStatus } from '../types';
 import {
@@ -11,7 +11,28 @@ import {
   CheckCircle2,
   Lock,
   AlertTriangle,
+  LayoutGrid,
+  Table2,
 } from 'lucide-react';
+import { FilterBar } from './shared/FilterBar';
+import { ExportExcelMenu, downloadXlsxSheet, type ExportFilterOptions } from './shared/ExportExcelMenu';
+import {
+  ColumnControlMenu,
+  applyColumnOrderAndVisibility,
+  applyRowControls,
+  matchesDateRange,
+  type RowSortOrder,
+} from './shared/ColumnControlMenu';
+
+const COACHING_COLUMNS = [
+  { key: 'name', label: 'Employee', labelAr: 'الموظف' },
+  { key: 'role', label: 'Role', labelAr: 'الدور' },
+  { key: 'knowledge', label: 'Knowledge %', labelAr: 'المعرفة %' },
+  { key: 'productivity', label: 'Prod. %', labelAr: 'الإنتاجية %' },
+  { key: 'csat', label: 'CSAT %', labelAr: 'CSAT %' },
+  { key: 'status', label: 'Coaching Status', labelAr: 'الحالة' },
+  { key: 'followUp', label: 'Follow-up Date', labelAr: 'تاريخ المتابعة' },
+];
 
 interface TeamCoachingViewProps {
   isAddCoachingModalOpen: boolean;
@@ -31,6 +52,7 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
     updateEmployee,
     addCoachingSession,
     currentBranch,
+    dateRange,
   } = useApp();
 
   const [selectedEmpForSession, setSelectedEmpForSession] = useState<Employee | null>(null);
@@ -40,6 +62,83 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [rowLimit, setRowLimit] = useState<number>(0);
+  const [sortOrder, setSortOrder] = useState<RowSortOrder>('default');
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const [colOrder, setColOrder] = useState<string[]>(() => COACHING_COLUMNS.map((c) => c.key));
+
+  const visibleColumns = useMemo(
+    () => applyColumnOrderAndVisibility(COACHING_COLUMNS, colOrder, hiddenCols),
+    [colOrder, hiddenCols]
+  );
+
+  const filteredEmployees = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return employees.filter((e) => {
+      if (dateRange.fromDate || dateRange.toDate) {
+        const dateCandidate = e.followUpDate || e.history[0]?.date || '';
+        if (!dateCandidate || !matchesDateRange(dateCandidate, dateRange.fromDate, dateRange.toDate)) {
+          return false;
+        }
+      }
+      if (!q) return true;
+      return (
+        e.name.toLowerCase().includes(q) ||
+        (e.nameAr || '').toLowerCase().includes(q) ||
+        (e.identifier || '').toLowerCase().includes(q) ||
+        (e.role || '').toLowerCase().includes(q) ||
+        e.coachingStatus.toLowerCase().includes(q)
+      );
+    });
+  }, [employees, search, dateRange.fromDate, dateRange.toDate]);
+
+  const displayedEmployees = useMemo(
+    () =>
+      applyRowControls(
+        filteredEmployees,
+        rowLimit,
+        sortOrder,
+        (e) => e.followUpDate || e.history[0]?.date || ''
+      ),
+    [filteredEmployees, rowLimit, sortOrder]
+  );
+
+  const handleFilteredExport = async (opts: ExportFilterOptions) => {
+    const baseList = opts.rowScope === 'all' ? employees : displayedEmployees;
+    const q = opts.searchText.trim().toLowerCase();
+    const list = baseList.filter((e) => {
+      if (opts.fromDate || opts.toDate) {
+        const d = e.followUpDate || e.history[0]?.date || '';
+        if (!d || !matchesDateRange(d, opts.fromDate, opts.toDate)) return false;
+      }
+      if (!q) return true;
+      return (
+        e.name.toLowerCase().includes(q) ||
+        (e.nameAr || '').toLowerCase().includes(q) ||
+        (e.identifier || '').toLowerCase().includes(q) ||
+        (e.role || '').toLowerCase().includes(q)
+      );
+    });
+
+    const cols = opts.colScope === 'visible' ? visibleColumns : COACHING_COLUMNS;
+    const rows = list.map((emp) => {
+      const out: Record<string, unknown> = { Branch: emp.branchCode };
+      for (const col of cols) {
+        const header = language === 'ar' ? col.labelAr : col.label;
+        if (col.key === 'name') out[header] = language === 'ar' ? emp.nameAr || emp.name : emp.name;
+        else if (col.key === 'role') out[header] = language === 'ar' ? emp.roleAr || emp.role : emp.role;
+        else if (col.key === 'knowledge') out[header] = emp.productKnowledgeScore ?? '';
+        else if (col.key === 'productivity') out[header] = emp.productivityScore ?? '';
+        else if (col.key === 'csat') out[header] = emp.customerExperienceScore ?? '';
+        else if (col.key === 'status') out[header] = emp.coachingStatus;
+        else if (col.key === 'followUp') out[header] = emp.followUpDate || '';
+      }
+      return out;
+    });
+    await downloadXlsxSheet('team_coaching.xlsx', 'Coaching', rows);
+  };
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -211,7 +310,7 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
     }
   };
 
-  const coachingPlannerCandidates = employees.filter(
+  const coachingPlannerCandidates = displayedEmployees.filter(
     (e) =>
       e.coachingStatus === 'needs_coaching' ||
       (e.productKnowledgeScore !== null && e.productKnowledgeScore < 75) ||
@@ -232,57 +331,120 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
       )}
 
       {/* Header */}
-      <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
-            {currentBranch && (
-              <>
-                <span className="font-mono font-bold text-teal-600 dark:text-teal-400">
-                  {currentBranch.code}
-                </span>
-                <span>·</span>
-                <span>{language === 'ar' ? currentBranch.nameAr : currentBranch.name}</span>
-              </>
-            )}
-          </div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
-            <UserCheck className="w-5 h-5 text-teal-600" />
-            <span>{t('teamTitle')}</span>
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            {t('teamSubtitle')}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-          {!canEdit && (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 text-xs font-semibold">
-              <Lock className="w-3.5 h-3.5" />
-              <span>{t('readOnlyBadge')}</span>
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-[#092d52] hover:bg-[#0c3b6b] text-white shadow-sm cursor-pointer"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>{language === 'ar' ? 'طباعة خطة التوجيه' : 'Print Plan'}</span>
-          </button>
-
-          {canEdit && (
-            <button
-              type="button"
-              onClick={openAddMemberModal}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>{t('addEmployee')}</span>
-            </button>
+      <div className="no-print pb-2 border-b border-slate-200 dark:border-slate-800">
+        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-1">
+          {currentBranch && (
+            <>
+              <span className="font-mono font-bold text-teal-600 dark:text-teal-400">
+                {currentBranch.code}
+              </span>
+              <span>·</span>
+              <span>{language === 'ar' ? currentBranch.nameAr : currentBranch.name}</span>
+            </>
           )}
         </div>
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+          <UserCheck className="w-5 h-5 text-teal-600" />
+          <span>{t('teamTitle')}</span>
+        </h1>
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          {t('teamSubtitle')}
+        </p>
       </div>
+
+      {/* Single-Row Unified Toolbar */}
+      <div className="no-print">
+        <FilterBar
+          search={search}
+          onSearchChange={setSearch}
+          showDateFilters
+          exportMenu={
+            <ExportExcelMenu
+              onExport={handleFilteredExport}
+              defaultFromDate={dateRange.fromDate}
+              defaultToDate={dateRange.toDate}
+              defaultSearchText={search}
+            />
+          }
+          onAddNew={canEdit ? openAddMemberModal : undefined}
+          addLabel={t('addRecord')}
+          rightActions={
+            <div className="flex flex-nowrap items-center gap-1.5 shrink-0">
+              <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('cards')}
+                  className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                    viewMode === 'cards'
+                      ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>{t('cardsView')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('table')}
+                  className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                    viewMode === 'table'
+                      ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  <Table2 className="w-3.5 h-3.5" />
+                  <span>{t('tableView')}</span>
+                </button>
+              </div>
+
+              <ColumnControlMenu
+                columns={COACHING_COLUMNS}
+                hiddenKeys={hiddenCols}
+                columnOrder={colOrder}
+                onToggleColumn={(key) =>
+                  setHiddenCols((prev) =>
+                    prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+                  )
+                }
+                onMoveColumn={(key, dir) => {
+                  const idx = colOrder.indexOf(key);
+                  const swap = dir === 'up' ? idx - 1 : idx + 1;
+                  if (idx < 0 || swap < 0 || swap >= colOrder.length) return;
+                  const next = [...colOrder];
+                  [next[idx], next[swap]] = [next[swap], next[idx]];
+                  setColOrder(next);
+                }}
+                onResetColumns={() => {
+                  setHiddenCols([]);
+                  setColOrder(COACHING_COLUMNS.map((c) => c.key));
+                }}
+                rowLimit={rowLimit}
+                onRowLimitChange={setRowLimit}
+                sortOrder={sortOrder}
+                onSortOrderChange={setSortOrder}
+                onAddRow={canEdit ? openAddMemberModal : undefined}
+                totalRowsCount={filteredEmployees.length}
+              />
+
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="flex items-center gap-1.5 px-3 min-h-[36px] h-[36px] text-xs font-semibold rounded-xl bg-[#092d52] hover:bg-[#0c3b6b] text-white cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>{language === 'ar' ? 'طباعة' : 'Print'}</span>
+              </button>
+            </div>
+          }
+        />
+      </div>
+
+      {!canEdit && (
+        <div className="no-print p-3 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex items-center gap-2">
+          <Lock className="w-4 h-4 text-[#092d52] dark:text-teal-400 shrink-0" />
+          <span>{t('readOnlyNotice')}</span>
+        </div>
+      )}
 
       {/* Print Document Header */}
       <div className="hidden print:block mb-6 pb-4 border-b-2 border-slate-900 text-slate-900">
@@ -395,14 +557,93 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
         )}
       </div>
 
-      {/* Team Scorecard Cards */}
-      {employees.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-          {t('noRecords')}
+      {/* Team Scorecard Cards / Table */}
+      {displayedEmployees.length === 0 ? (
+        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3">
+          <p className="text-xs text-slate-500">{t('noRecords')}</p>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={openAddMemberModal}
+              className="inline-flex items-center gap-1.5 px-4 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('addRecord')}</span>
+            </button>
+          )}
+        </div>
+      ) : viewMode === 'table' ? (
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-[#092d52] text-white">
+                <tr>
+                  {visibleColumns.map((col) => (
+                    <th key={col.key} className="px-3.5 py-2.5 font-semibold text-start whitespace-nowrap">
+                      {language === 'ar' ? col.labelAr : col.label}
+                    </th>
+                  ))}
+                  <th className="px-3.5 py-2.5 font-semibold text-end whitespace-nowrap">
+                    {language === 'ar' ? 'إجراءات' : 'Actions'}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {displayedEmployees.map((emp) => (
+                  <tr key={emp.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                    {visibleColumns.map((col) => {
+                      if (col.key === 'name') {
+                        return (
+                          <td key={col.key} className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
+                            {language === 'ar' ? emp.nameAr || emp.name : emp.name}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'role') return <td key={col.key} className="px-3.5 py-2.5">{language === 'ar' ? emp.roleAr || emp.role : emp.role}</td>;
+                      if (col.key === 'knowledge') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{renderMetricLabel(emp.productKnowledgeScore)}</td>;
+                      if (col.key === 'productivity') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{renderMetricLabel(emp.productivityScore)}</td>;
+                      if (col.key === 'csat') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{renderMetricLabel(emp.customerExperienceScore)}</td>;
+                      if (col.key === 'status') return <td key={col.key} className="px-3.5 py-2.5">{emp.coachingStatus.replace('_', ' ')}</td>;
+                      return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{emp.followUpDate || t('unconfigured')}</td>;
+                    })}
+                    <td className="px-3.5 py-2.5 text-end whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1">
+                        {canEdit && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openCoachingModal(emp)}
+                              className="px-2 py-1 text-[11px] font-semibold rounded-lg bg-teal-50 text-teal-700 dark:bg-teal-950/50 dark:text-teal-300 cursor-pointer"
+                            >
+                              {t('logCoachingSession')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openEditMemberModal(emp)}
+                              className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSelectedEmpForHistory(emp)}
+                          className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
+                        >
+                          <History className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {employees.map((emp) => (
+          {displayedEmployees.map((emp) => (
             <div
               key={emp.id}
               className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between"
@@ -626,94 +867,86 @@ export const TeamCoachingView: React.FC<TeamCoachingViewProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSaveMember} className="space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-semibold mb-1">Name (EN)</label>
-                  <input
-                    type="text"
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">الاسم (العربية)</label>
-                  <input
-                    type="text"
-                    value={nameAr}
-                    onChange={(e) => setNameAr(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
-                    dir="rtl"
-                  />
-                </div>
+            <form onSubmit={handleSaveMember} className="grid grid-cols-1 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold mb-1">Name (EN)</label>
+                <input
+                  type="text"
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
+                />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block font-semibold mb-1">Role</label>
-                  <input
-                    type="text"
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">SID</label>
-                  <input
-                    type="text"
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono outline-none"
-                  />
-                </div>
+              <div>
+                <label className="block font-semibold mb-1">الاسم (العربية)</label>
+                <input
+                  type="text"
+                  value={nameAr}
+                  onChange={(e) => setNameAr(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
+                  dir="rtl"
+                />
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="block text-[10px] text-slate-400 mb-1">
-                    Knowledge % (optional)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    placeholder={t('unconfigured')}
-                    value={productKnowledgeScore}
-                    onChange={(e) => setProductKnowledgeScore(e.target.value)}
-                    className="w-full px-2 py-1.5 rounded-lg border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-center"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-slate-400 mb-1">
-                    Productivity % (optional)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    placeholder={t('unconfigured')}
-                    value={productivityScore}
-                    onChange={(e) => setProductivityScore(e.target.value)}
-                    className="w-full px-2 py-1.5 rounded-lg border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-center"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] text-slate-400 mb-1">
-                    CSAT % (optional)
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    placeholder={t('unconfigured')}
-                    value={customerExperienceScore}
-                    onChange={(e) => setCustomerExperienceScore(e.target.value)}
-                    className="w-full px-2 py-1.5 rounded-lg border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-center"
-                  />
-                </div>
+              <div>
+                <label className="block font-semibold mb-1">Role</label>
+                <input
+                  type="text"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">SID</label>
+                <input
+                  type="text"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">Knowledge % (optional)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder={t('unconfigured')}
+                  value={productKnowledgeScore}
+                  onChange={(e) => setProductKnowledgeScore(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">Productivity % (optional)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder={t('unconfigured')}
+                  value={productivityScore}
+                  onChange={(e) => setProductivityScore(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">CSAT % (optional)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  placeholder={t('unconfigured')}
+                  value={customerExperienceScore}
+                  onChange={(e) => setCustomerExperienceScore(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl border dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono"
+                />
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">

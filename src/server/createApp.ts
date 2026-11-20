@@ -120,13 +120,52 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
       return;
     }
 
-    const pgCode = typeof err === 'object' && err !== null && 'code' in err ? String((err as { code?: unknown }).code) : '';
+    const extractCode = (value: unknown, depth = 0): string => {
+      if (!value || typeof value !== 'object' || depth > 3) return '';
+      const record = value as { code?: unknown; cause?: unknown };
+      if (record.code !== undefined && record.code !== null && String(record.code).trim() !== '') {
+        return String(record.code);
+      }
+      return extractCode(record.cause, depth + 1);
+    };
+
+    const pgCode = extractCode(err);
     if (pgCode === '23505') {
       res.status(409).json({ error: 'A duplicate record already exists.' });
       return;
     }
     if (pgCode === '23503' || pgCode === '23514') {
       res.status(400).json({ error: 'Record violates referential or validation constraints.' });
+      return;
+    }
+
+    const dbUnavailableCodes = new Set([
+      '28P01', // invalid_password
+      '28000', // invalid_authorization_specification
+      '3D000', // invalid_catalog_name
+      '42P01', // undefined_table (schema/migrations not yet applied)
+      '57P03', // cannot_connect_now
+      '08001', // sqlclient_unable_to_establish_sqlconnection
+      '08006', // connection_failure
+      'ECONNREFUSED',
+      'ENOTFOUND',
+      'ETIMEDOUT',
+      'EAI_AGAIN',
+    ]);
+
+    if (dbUnavailableCodes.has(pgCode)) {
+      const detail =
+        pgCode === '28P01' || pgCode === '28000'
+          ? 'PostgreSQL authentication failed. Verify SQL_USER and SQL_PASSWORD.'
+          : pgCode === '42P01'
+            ? 'PostgreSQL schema is not initialized yet. Run database migrations first.'
+            : 'PostgreSQL database is currently unreachable.';
+      console.warn(`[ASB Workforce] Database error (${pgCode}): ${detail}`);
+      res.status(503).json({
+        error: detail,
+        code: 'DATABASE_UNAVAILABLE',
+        pgCode,
+      });
       return;
     }
 

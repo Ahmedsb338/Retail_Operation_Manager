@@ -24,6 +24,12 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('Migration failed:', err instanceof Error ? err.message : err);
+  const cause =
+    err && typeof err === 'object' && 'cause' in err ? (err as { cause?: { message?: string } }).cause : undefined;
+  console.error(
+    'Migration failed:',
+    err instanceof Error ? err.message : err,
+    cause?.message ? `(${cause.message})` : ''
+  );
   process.exit(1);
 });

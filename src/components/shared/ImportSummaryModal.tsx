@@ -32,17 +32,27 @@ export const ImportSummaryModal: React.FC<ImportSummaryModalProps> = ({
     setSubmitting(true);
     setError(null);
     try {
-      const ext = selectedFile.name.toLowerCase().endsWith('.xlsx') ? 'xlsx' : 'csv';
+      const ext = selectedFile.name.split('.').pop()?.toLowerCase().trim() || 'xlsx';
       const base64 = await fileToBase64(selectedFile);
-      const res = await apiRequest<{ summary: ImportSummary }>(endpoint, {
+      const res = await apiRequest<ImportSummary | { summary: ImportSummary }>(endpoint, {
         method: 'POST',
         body: {
           ...(extraPayload || {}),
           fileBase64: base64,
           fileType: ext,
+          fileName: selectedFile.name,
         },
       });
-      setSummary(res.summary);
+      const data = 'summary' in res && res.summary ? res.summary : (res as ImportSummary);
+      setSummary({
+        total: Number(data?.total ?? 0),
+        valid: Number(data?.valid ?? 0),
+        invalid: Number(data?.invalid ?? 0),
+        duplicate: Number(data?.duplicate ?? 0),
+        imported: Number(data?.imported ?? 0),
+        rejected: Number(data?.rejected ?? 0),
+        reasons: Array.isArray(data?.reasons) ? data.reasons : [],
+      });
       onSuccess();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Import failed.');
@@ -80,11 +90,13 @@ export const ImportSummaryModal: React.FC<ImportSummaryModalProps> = ({
 
           <div>
             <label className="block font-semibold text-slate-700 dark:text-slate-200 mb-1.5">
-              {language === 'ar' ? 'اختر ملف CSV أو Excel (.xlsx)' : 'Select CSV or Excel (.xlsx) file'}
+              {language === 'ar'
+                ? 'اختر أي ملف Excel أو CSV (.xlsx, .xls, .xlsm, .xlsb, .ods, .csv, .tsv)'
+                : 'Select any Excel or spreadsheet file (.xlsx, .xls, .xlsm, .xlsb, .ods, .csv, .tsv)'}
             </label>
             <input
               type="file"
-              accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              accept=".xlsx,.xls,.xlsm,.xlsb,.xltx,.xltm,.ods,.csv,.tsv,.txt,text/csv,text/tab-separated-values,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.oasis.opendocument.spreadsheet"
               onChange={(e) => {
                 setSelectedFile(e.target.files?.[0] || null);
                 setSummary(null);

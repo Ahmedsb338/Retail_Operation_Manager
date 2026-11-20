@@ -197,6 +197,42 @@ describe('ASB Workforce Express API — Full Security, Roles, Calculations & Int
       json: { tasks: [] },
     });
     assert.equal(legacyAi.status, 410);
+
+    // Nested Drizzle/pg auth error (28P01) maps to 503 DATABASE_UNAVAILABLE instead of 500
+    const failingApp = await createApp({
+      getDb: () =>
+        ({
+          select: () => ({
+            from: () => ({
+              where: () =>
+                Promise.reject(
+                  Object.assign(new Error('Failed query'), {
+                    cause: Object.assign(new Error('password authentication failed for user "postgres"'), {
+                      code: '28P01',
+                    }),
+                  })
+                ),
+            }),
+          }),
+        }) as unknown as TestDbContext['db'],
+      isDbConfigured: () => true,
+      getAiClient: () => null,
+      mountFrontend: 'none',
+    });
+    const failingServer = failingApp.listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => failingServer.once('listening', () => resolve()));
+    const failingAddr = failingServer.address() as AddressInfo;
+    try {
+      const authFailRes = await httpRequest(
+        `http://127.0.0.1:${failingAddr.port}`,
+        '/api/v1/auth/branches'
+      );
+      assert.equal(authFailRes.status, 503);
+      assert.equal(authFailRes.body.code, 'DATABASE_UNAVAILABLE');
+      assert.equal(authFailRes.body.pgCode, '28P01');
+    } finally {
+      await new Promise<void>((resolve) => failingServer.close(() => resolve()));
+    }
   });
 
   it('rejects unauthenticated requests, rejects mutating requests without CSRF header/origin, and separates branch credentials', async () => {
@@ -264,7 +300,7 @@ describe('ASB Workforce Express API — Full Security, Roles, Calculations & Int
 
     const login2000 = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
       method: 'POST',
-      headers: { 'x-csrf-check': '1' },
+      headers: { 'x-csrf-check': '1', 'x-forwarded-proto': 'https' },
       json: {
         branchName: branch2000Name,
         branchCode: branch2000Code,
@@ -272,6 +308,10 @@ describe('ASB Workforce Express API — Full Security, Roles, Calculations & Int
       },
     });
     assert.equal(login2000.status, 200);
+    const cookie2000Header = String(login2000.headers['set-cookie']);
+    assert.ok(cookie2000Header.includes('SameSite=None'));
+    assert.ok(cookie2000Header.includes('Secure'));
+    assert.ok(cookie2000Header.includes('Partitioned'));
     sm2000Cookie = extractSessionCookie(login2000.headers);
 
     // Area Manager logins
@@ -746,5 +786,111 @@ describe('ASB Workforce Express API — Full Security, Roles, Calculations & Int
 
     const afterLogoutAll = await httpRequest(baseUrl, '/api/v1/auth/me', { cookie: rotatedCookie });
     assert.equal(afterLogoutAll.status, 401);
+  });
+
+  it('claims and persists branch code on first login for unconfigured branches and rejects collisions', async () => {
+    // Attempting to claim with an already-used branch code (1750) fails with 409
+    const collision = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Wadi El Natrun Store',
+        branchCode: '1750',
+      },
+    });
+    assert.equal(collision.status, 409);
+
+    // Invalid short branch code fails with 400
+    const tooShort = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Wadi El Natrun Store',
+        branchCode: '12',
+      },
+    });
+    assert.equal(tooShort.status, 400);
+
+    // Valid first-login saves the branch code and issues a STORE_MANAGER session
+    const firstClaim = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Wadi El Natrun Store',
+        branchCode: '1805',
+      },
+    });
+    assert.equal(firstClaim.status, 200);
+    assert.equal(firstClaim.body.claimedFirstLogin, true);
+    assert.equal(firstClaim.body.user.role, 'STORE_MANAGER');
+    assert.equal(firstClaim.body.user.branchCode, '1805');
+
+    // Public catalog moves the branch from unconfiguredBranches to configuredBranches
+    const updatedCatalog = await httpRequest(baseUrl, '/api/v1/auth/branches');
+    assert.equal(updatedCatalog.status, 200);
+    assert.equal(updatedCatalog.body.configuredBranches.length, 3);
+    assert.equal(updatedCatalog.body.unconfiguredBranches.length, 12);
+
+    // Subsequent login with wrong code is rejected (401)
+    const wrongRepeat = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Wadi El Natrun Store',
+        branchCode: '9999',
+      },
+    });
+    assert.equal(wrongRepeat.status, 401);
+
+    // Subsequent login with saved branch code succeeds (200)
+    const validRepeat = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Wadi El Natrun Store',
+        branchCode: '1805',
+      },
+    });
+    assert.equal(validRepeat.status, 200);
+    assert.equal(validRepeat.body.user.branchCode, '1805');
+
+    // Pre-seeded branch without branchCredentials activates ONLY with its configured code
+    await ctx.db.insert(branches).values({
+      code: '3001',
+      storeId: '3001',
+      name: 'Preseeded Verified Branch',
+      nameAr: 'فرع تجريبي موثق',
+      city: 'Cairo',
+      cityAr: 'القاهرة',
+      area: 'Cairo',
+      managerName: 'Manager 3001',
+      managerNameAr: 'مدير 3001',
+      businessDate: '2026-11-03',
+      totalShifts: 25,
+      remainingShifts: 10,
+      targetDailyRevenue: 100000,
+      isActive: true,
+    });
+
+    const wrongInitial = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Preseeded Verified Branch',
+        branchCode: '9999',
+      },
+    });
+    assert.equal(wrongInitial.status, 401);
+
+    const validInitial = await httpRequest(baseUrl, '/api/v1/auth/login-branch', {
+      method: 'POST',
+      headers: { 'x-csrf-check': '1' },
+      json: {
+        branchName: 'Preseeded Verified Branch',
+        branchCode: '3001',
+      },
+    });
+    assert.equal(validInitial.status, 200);
+    assert.equal(validInitial.body.user.branchCode, '3001');
   });
 });

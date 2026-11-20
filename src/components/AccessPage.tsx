@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ShieldCheck,
   Building2,
@@ -8,11 +8,18 @@ import {
   Globe,
   Moon,
   Sun,
-  Clock,
+  Eye,
+  EyeOff,
   Info,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DatabaseUnavailableBanner } from './DatabaseUnavailableBanner';
+
+interface DropdownBranchOption {
+  name: string;
+  label: string;
+  isUnclaimed: boolean;
+}
 
 export const AccessPage: React.FC = () => {
   const {
@@ -31,18 +38,55 @@ export const AccessPage: React.FC = () => {
   const [loginMode, setLoginMode] = useState<'store' | 'area'>('store');
   const [selectedBranchName, setSelectedBranchName] = useState<string>('');
   const [branchCodeInput, setBranchCodeInput] = useState<string>('');
-  const [accessCodeInput, setAccessCodeInput] = useState<string>('');
+  const [showBranchCode, setShowBranchCode] = useState<boolean>(false);
   const [areaUsername, setAreaUsername] = useState<string>('');
   const [areaPassword, setAreaPassword] = useState<string>('');
   const [submitting, setSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>('');
-  const [showUnconfigured, setShowUnconfigured] = useState<boolean>(false);
+
+  const branchOptions = useMemo<DropdownBranchOption[]>(() => {
+    const seen = new Set<string>();
+    const options: DropdownBranchOption[] = [];
+
+    for (const b of configuredBranches) {
+      const key = b.name.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const displayName = language === 'ar' ? b.nameAr || b.name : b.name;
+      const cityLabel = language === 'ar' ? b.cityAr || b.city : b.city;
+      options.push({
+        name: b.name,
+        label: cityLabel ? `${displayName} (${cityLabel})` : displayName,
+        isUnclaimed: false,
+      });
+    }
+
+    for (const ub of unconfiguredBranches) {
+      const key = ub.branchName.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({
+        name: ub.branchName,
+        label: ub.branchName,
+        isUnclaimed: true,
+      });
+    }
+
+    return options;
+  }, [configuredBranches, unconfiguredBranches, language]);
+
+  const selectedOption = useMemo(
+    () => branchOptions.find((o) => o.name === selectedBranchName) ?? null,
+    [branchOptions, selectedBranchName]
+  );
 
   useEffect(() => {
-    if (!selectedBranchName && configuredBranches.length > 0) {
-      setSelectedBranchName(configuredBranches[0].name);
+    if (branchOptions.length === 0) return;
+    const stillExists = branchOptions.some((o) => o.name === selectedBranchName);
+    if (!selectedBranchName || !stillExists) {
+      setSelectedBranchName(branchOptions[0].name);
     }
-  }, [configuredBranches, selectedBranchName]);
+  }, [branchOptions, selectedBranchName]);
 
   const handleStoreSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,7 +95,6 @@ export const AccessPage: React.FC = () => {
     const result = await loginBranch({
       branchName: selectedBranchName,
       branchCode: branchCodeInput.trim(),
-      accessCode: accessCodeInput,
     });
     setSubmitting(false);
     if (!result.success) {
@@ -129,9 +172,9 @@ export const AccessPage: React.FC = () => {
 
         <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl overflow-hidden">
           <div className="px-6 py-6 bg-[#092d52] text-white space-y-1.5">
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-white/10 text-[11px] font-semibold text-teal-200">
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 text-[11px] font-semibold text-teal-200">
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>{t('demoBadge')}</span>
+              <span>{t('platformBadge')}</span>
             </div>
             <h1 className="text-xl font-bold tracking-tight">{t('accessTitle')}</h1>
             <p className="text-xs text-slate-200/90 leading-relaxed">{t('accessSubtitle')}</p>
@@ -176,22 +219,32 @@ export const AccessPage: React.FC = () => {
             {loginMode === 'store' ? (
               <form onSubmit={handleStoreSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {t('branchNameLabel')}
-                  </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">
+                      {t('branchNameLabel')}
+                    </label>
+                    {selectedOption?.isUnclaimed && (
+                      <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                        {t('newBranchBadge')}
+                      </span>
+                    )}
+                  </div>
                   <select
                     required
-                    disabled={databaseUnavailable || configuredBranches.length === 0}
+                    disabled={databaseUnavailable || branchOptions.length === 0}
                     value={selectedBranchName}
-                    onChange={(e) => setSelectedBranchName(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedBranchName(e.target.value);
+                      setErrorMsg('');
+                    }}
                     className="w-full px-3.5 min-h-[44px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-medium text-slate-900 dark:text-white"
                   >
-                    {configuredBranches.length === 0 ? (
+                    {branchOptions.length === 0 ? (
                       <option value="">{t('branchSelectPlaceholder')}</option>
                     ) : (
-                      configuredBranches.map((b) => (
-                        <option key={b.code} value={b.name}>
-                          {language === 'ar' ? b.nameAr || b.name : b.name} ({b.city})
+                      branchOptions.map((opt) => (
+                        <option key={opt.name} value={opt.name}>
+                          {opt.label}
                         </option>
                       ))
                     )}
@@ -202,36 +255,35 @@ export const AccessPage: React.FC = () => {
                   <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                     {t('branchCodeLabel')}
                   </label>
-                  <input
-                    type="text"
-                    required
-                    autoComplete="username"
-                    disabled={databaseUnavailable}
-                    value={branchCodeInput}
-                    onChange={(e) => setBranchCodeInput(e.target.value)}
-                    placeholder={t('branchCodePlaceholder')}
-                    className="w-full px-3.5 min-h-[44px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                    {t('branchAccessCodeLabel')}
-                  </label>
                   <div className="relative">
                     <KeyRound className="w-4 h-4 text-slate-400 absolute start-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                     <input
-                      type="password"
+                      type={showBranchCode ? 'text' : 'password'}
                       required
                       autoComplete="current-password"
                       disabled={databaseUnavailable}
-                      value={accessCodeInput}
-                      onChange={(e) => setAccessCodeInput(e.target.value)}
-                      placeholder={t('branchAccessCodePlaceholder')}
-                      className="w-full ps-10 pe-3.5 min-h-[44px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white"
+                      value={branchCodeInput}
+                      onChange={(e) => setBranchCodeInput(e.target.value)}
+                      placeholder={t('branchCodePlaceholder')}
+                      className="w-full ps-10 pe-10 min-h-[44px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-900 dark:text-white"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowBranchCode((prev) => !prev)}
+                      className="absolute end-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      aria-label={showBranchCode ? 'Hide branch code' : 'Show branch code'}
+                    >
+                      {showBranchCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
+
+                {selectedOption?.isUnclaimed && (
+                  <div className="p-3 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-2">
+                    <Info className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+                    <span>{t('firstLoginBranchHint')}</span>
+                  </div>
+                )}
 
                 {errorMsg && (
                   <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-200 flex items-start gap-2">
@@ -242,7 +294,7 @@ export const AccessPage: React.FC = () => {
 
                 <button
                   type="submit"
-                  disabled={submitting || databaseUnavailable || configuredBranches.length === 0}
+                  disabled={submitting || databaseUnavailable || branchOptions.length === 0}
                   className="w-full min-h-[46px] rounded-xl bg-[#092d52] hover:bg-[#0d3b6b] disabled:opacity-50 text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
                 >
                   {submitting ? t('signingIn') : t('accessBtn')}
@@ -305,40 +357,6 @@ export const AccessPage: React.FC = () => {
                   {submitting ? t('signingIn') : t('accessBtn')}
                 </button>
               </form>
-            )}
-
-            {/* Separate Non-Loginable Unconfigured Branches Notice */}
-            {unconfiguredBranches.length > 0 && (
-              <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowUnconfigured(!showUnconfigured)}
-                  className="w-full flex items-center justify-between text-[11px] font-semibold text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-amber-500" />
-                    <span>
-                      {t('unconfiguredBranchesTitle')} ({unconfiguredBranches.length})
-                    </span>
-                  </span>
-                  <span>{showUnconfigured ? '−' : '+'}</span>
-                </button>
-
-                {showUnconfigured && (
-                  <div className="mt-2.5 p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 space-y-1.5 text-[11px]">
-                    <p className="text-amber-800 dark:text-amber-200">
-                      {t('unconfiguredBranchesHint')}
-                    </p>
-                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1 pt-1 text-slate-700 dark:text-slate-300">
-                      {unconfiguredBranches.map((ub) => (
-                        <li key={ub.branchName} className="truncate font-medium">
-                          · {ub.branchName}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
             )}
           </div>
         </div>

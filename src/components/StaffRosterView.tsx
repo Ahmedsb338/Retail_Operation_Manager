@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Users,
   Plus,
@@ -8,14 +8,34 @@ import {
   UserCheck,
   Briefcase,
   Award,
-  Download,
-  Upload,
   Lock,
+  LayoutGrid,
+  Table2,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { Employee } from '../types';
 import { apiDownloadFile, buildQueryParams } from '../services/apiClient';
+import { FilterBar } from './shared/FilterBar';
 import { ImportSummaryModal } from './shared/ImportSummaryModal';
+import { ExportExcelMenu, downloadXlsxSheet, type ExportFilterOptions } from './shared/ExportExcelMenu';
+import {
+  ColumnControlMenu,
+  applyColumnOrderAndVisibility,
+  applyRowControls,
+  matchesDateRange,
+  type RowSortOrder,
+} from './shared/ColumnControlMenu';
+
+const STAFF_COLUMNS = [
+  { key: 'name', label: 'Employee Name', labelAr: 'اسم الموظف' },
+  { key: 'sid', label: 'SID', labelAr: 'الكود الوظيفي' },
+  { key: 'role', label: 'Role', labelAr: 'المسمى الوظيفي' },
+  { key: 'knowledge', label: 'Knowledge %', labelAr: 'المعرفة %' },
+  { key: 'productivity', label: 'Productivity %', labelAr: 'الإنتاجية %' },
+  { key: 'csat', label: 'CSAT %', labelAr: 'رضا العملاء %' },
+  { key: 'coachingStatus', label: 'Coaching Status', labelAr: 'حالة التوجيه' },
+  { key: 'sessions', label: 'Sessions', labelAr: 'الجلسات' },
+];
 
 export const StaffRosterView: React.FC = () => {
   const {
@@ -29,10 +49,16 @@ export const StaffRosterView: React.FC = () => {
     deleteEmployee,
     currentBranch,
     selectedBranchCode,
+    dateRange,
     refreshWorkspaceData,
   } = useApp();
 
   const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>('table');
+  const [rowLimit, setRowLimit] = useState<number>(0);
+  const [sortOrder, setSortOrder] = useState<RowSortOrder>('default');
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const [colOrder, setColOrder] = useState<string[]>(() => STAFF_COLUMNS.map((c) => c.key));
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [editingEmp, setEditingEmp] = useState<Employee | null>(null);
@@ -40,7 +66,6 @@ export const StaffRosterView: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Form states
   const [name, setName] = useState('');
   const [nameAr, setNameAr] = useState('');
   const [identifier, setIdentifier] = useState('');
@@ -50,6 +75,29 @@ export const StaffRosterView: React.FC = () => {
   const [productivity, setProductivity] = useState<string>('');
   const [csat, setCsat] = useState<string>('');
   const [notes, setNotes] = useState('');
+
+  const visibleColumns = useMemo(
+    () => applyColumnOrderAndVisibility(STAFF_COLUMNS, colOrder, hiddenCols),
+    [colOrder, hiddenCols]
+  );
+
+  const handleToggleColumn = (key: string) => {
+    setHiddenCols((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  };
+
+  const handleMoveColumn = (key: string, direction: 'up' | 'down') => {
+    setColOrder((prev) => {
+      const idx = prev.indexOf(key);
+      if (idx === -1) return prev;
+      const target = direction === 'up' ? idx - 1 : idx + 1;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
+  };
 
   const openAddModal = () => {
     setName('');
@@ -137,105 +185,282 @@ export const StaffRosterView: React.FC = () => {
     setConfirmDeleteId(null);
   };
 
-  const handleExport = async (format: 'csv' | 'xlsx') => {
-    const qs = buildQueryParams({
-      branchCode:
-        user?.role === 'AREA_MANAGER'
-          ? selectedBranchCode || undefined
-          : user?.branchCode || undefined,
-      format,
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return employees.filter((e) => {
+      if (dateRange.fromDate || dateRange.toDate) {
+        const latestHistoryDate = e.history[0]?.date || '';
+        const dateCandidate = e.followUpDate || latestHistoryDate;
+        if (dateCandidate && !matchesDateRange(dateCandidate, dateRange.fromDate, dateRange.toDate)) {
+          return false;
+        }
+        if (!dateCandidate) return false;
+      }
+      if (!q) return true;
+      return (
+        e.name.toLowerCase().includes(q) ||
+        e.nameAr.toLowerCase().includes(q) ||
+        (e.identifier || '').toLowerCase().includes(q) ||
+        (e.role || '').toLowerCase().includes(q)
+      );
     });
-    await apiDownloadFile(`/api/v1/staff/export${qs}`, `staff_roster.${format}`);
+  }, [employees, search, dateRange.fromDate, dateRange.toDate]);
+
+  const displayedEmployees = useMemo(
+    () =>
+      applyRowControls(filtered, rowLimit, sortOrder, (e) => e.followUpDate || e.history[0]?.date || ''),
+    [filtered, rowLimit, sortOrder]
+  );
+
+  const handleFilteredExport = async (opts: ExportFilterOptions) => {
+    if (opts.rowScope === 'all' && opts.colScope === 'all' && !opts.searchText.trim() && !opts.fromDate && !opts.toDate) {
+      const qs = buildQueryParams({
+        branchCode:
+          user?.role === 'AREA_MANAGER'
+            ? selectedBranchCode || undefined
+            : user?.branchCode || undefined,
+        format: 'xlsx',
+      });
+      await apiDownloadFile(`/api/v1/staff/export${qs}`, 'staff_roster.xlsx');
+      return;
+    }
+
+    const baseList = opts.rowScope === 'all' ? employees : displayedEmployees;
+    const q = opts.searchText.trim().toLowerCase();
+    const list = baseList.filter((e) => {
+      if (opts.fromDate || opts.toDate) {
+        const d = e.followUpDate || e.history[0]?.date || '';
+        if (!d || !matchesDateRange(d, opts.fromDate, opts.toDate)) return false;
+      }
+      if (!q) return true;
+      return (
+        e.name.toLowerCase().includes(q) ||
+        e.nameAr.toLowerCase().includes(q) ||
+        (e.identifier || '').toLowerCase().includes(q) ||
+        (e.role || '').toLowerCase().includes(q)
+      );
+    });
+
+    const cols = opts.colScope === 'visible' ? visibleColumns : STAFF_COLUMNS;
+    const rows = list.map((emp) => {
+      const out: Record<string, unknown> = { 'Store ID': emp.branchCode };
+      for (const col of cols) {
+        const header = language === 'ar' ? col.labelAr : col.label;
+        if (col.key === 'name') out[header] = language === 'ar' ? emp.nameAr || emp.name : emp.name;
+        else if (col.key === 'sid') out[header] = emp.identifier || '';
+        else if (col.key === 'role') out[header] = language === 'ar' ? emp.roleAr || emp.role : emp.role;
+        else if (col.key === 'knowledge') out[header] = emp.productKnowledgeScore ?? '';
+        else if (col.key === 'productivity') out[header] = emp.productivityScore ?? '';
+        else if (col.key === 'csat') out[header] = emp.customerExperienceScore ?? '';
+        else if (col.key === 'coachingStatus') out[header] = emp.coachingStatus;
+        else if (col.key === 'sessions') out[header] = emp.history.length;
+      }
+      return out;
+    });
+    await downloadXlsxSheet('staff_roster.xlsx', 'Staff Roster', rows);
   };
 
-  const filtered = employees.filter((e) => {
-    const q = search.trim().toLowerCase();
-    if (!q) return true;
-    return (
-      e.name.toLowerCase().includes(q) ||
-      e.nameAr.toLowerCase().includes(q) ||
-      (e.identifier || '').toLowerCase().includes(q) ||
-      (e.role || '').toLowerCase().includes(q)
-    );
-  });
-
   return (
-    <div className="space-y-5 content-container">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
-            <Users className="w-5 h-5 text-[#092d52] dark:text-teal-400" />
-            <span>{t('teamTitle')}</span>
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('teamSubtitle')}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => handleExport('csv')}
-            className="inline-flex items-center gap-1.5 px-3 min-h-[38px] rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{t('exportCsv')}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => handleExport('xlsx')}
-            className="inline-flex items-center gap-1.5 px-3 min-h-[38px] rounded-xl text-xs font-semibold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{t('exportXlsx')}</span>
-          </button>
-
-          {canEdit ? (
-            <>
-              <button
-                type="button"
-                onClick={() => setShowImport(true)}
-                className="inline-flex items-center gap-1.5 px-3 min-h-[38px] rounded-xl text-xs font-bold bg-[#092d52] text-white cursor-pointer"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>{t('importData')}</span>
-              </button>
-              <button
-                type="button"
-                onClick={openAddModal}
-                className="inline-flex items-center gap-1.5 px-3.5 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
-              >
-                <Plus className="w-4 h-4" />
-                <span>{t('addEmployee')}</span>
-              </button>
-            </>
-          ) : (
-            <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold">
-              <Lock className="w-3.5 h-3.5" />
-              {t('readOnlyBadge')}
-            </span>
-          )}
-        </div>
+    <div className="space-y-4 content-container">
+      <div className="pb-2 border-b border-slate-200 dark:border-slate-800">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+          <Users className="w-5 h-5 text-[#092d52] dark:text-teal-400" />
+          <span>{t('teamTitle')}</span>
+        </h1>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{t('teamSubtitle')}</p>
       </div>
 
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder={t('searchPlaceholder')}
-        className="w-full max-w-md px-3.5 min-h-[40px] rounded-xl text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800"
+      {!canEdit && (
+        <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex items-center gap-2">
+          <Lock className="w-4 h-4 text-[#092d52] dark:text-teal-400 shrink-0" />
+          <span>{t('readOnlyNotice')}</span>
+        </div>
+      )}
+
+      <FilterBar
+        search={search}
+        onSearchChange={setSearch}
+        showDateFilters
+        exportMenu={
+          <ExportExcelMenu
+            onExport={handleFilteredExport}
+            defaultFromDate={dateRange.fromDate}
+            defaultToDate={dateRange.toDate}
+            defaultSearchText={search}
+          />
+        }
+        onOpenImport={canEdit ? () => setShowImport(true) : undefined}
+        onAddNew={canEdit ? openAddModal : undefined}
+        addLabel={t('addRecord')}
+        rightActions={
+          <div className="flex flex-nowrap items-center gap-1.5 shrink-0">
+            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                  viewMode === 'table'
+                    ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                    : 'text-slate-500'
+                }`}
+              >
+                <Table2 className="w-3.5 h-3.5" />
+                <span>{t('tableView')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('cards')}
+                className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                  viewMode === 'cards'
+                    ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                    : 'text-slate-500'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>{t('cardsView')}</span>
+              </button>
+            </div>
+
+            <ColumnControlMenu
+              columns={STAFF_COLUMNS}
+              hiddenKeys={hiddenCols}
+              columnOrder={colOrder}
+              onToggleColumn={handleToggleColumn}
+              onMoveColumn={handleMoveColumn}
+              onResetColumns={() => {
+                setHiddenCols([]);
+                setColOrder(STAFF_COLUMNS.map((c) => c.key));
+              }}
+              rowLimit={rowLimit}
+              onRowLimitChange={setRowLimit}
+              sortOrder={sortOrder}
+              onSortOrderChange={setSortOrder}
+              onAddRow={canEdit ? openAddModal : undefined}
+              totalRowsCount={filtered.length}
+            />
+          </div>
+        }
       />
 
-      {filtered.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-          {language === 'ar'
-            ? 'لا يوجد موظفون مسجلون لهذا النطاق بعد.'
-            : 'No staff members recorded for this branch scope yet.'}
+      {displayedEmployees.length === 0 ? (
+        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3">
+          <p className="text-xs text-slate-500">
+            {language === 'ar'
+              ? 'لا يوجد موظفون مسجلون لهذا النطاق بعد.'
+              : 'No staff members recorded for this branch scope yet.'}
+          </p>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="inline-flex items-center gap-1.5 px-4 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('addRecord')}</span>
+            </button>
+          )}
+        </div>
+      ) : viewMode === 'table' ? (
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-[#092d52] text-white">
+                <tr>
+                  <th className="px-3.5 py-2.5 font-semibold text-start whitespace-nowrap">
+                    {language === 'ar' ? 'كود الفرع' : 'Store ID'}
+                  </th>
+                  {visibleColumns.map((col) => (
+                    <th key={col.key} className="px-3.5 py-2.5 font-semibold text-start whitespace-nowrap">
+                      {language === 'ar' ? col.labelAr : col.label}
+                    </th>
+                  ))}
+                  {canEdit && (
+                    <th className="px-3.5 py-2.5 font-semibold text-end whitespace-nowrap">
+                      {language === 'ar' ? 'إجراءات' : 'Actions'}
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {displayedEmployees.map((emp) => (
+                  <tr key={emp.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                    <td className="px-3.5 py-2.5 font-mono tabular-nums font-bold text-[#092d52] dark:text-teal-400">
+                      {emp.branchCode}
+                    </td>
+                    {visibleColumns.map((col) => {
+                      if (col.key === 'name') {
+                        return (
+                          <td key={col.key} className="px-3.5 py-2.5 font-semibold text-slate-900 dark:text-white">
+                            {language === 'ar' ? emp.nameAr || emp.name : emp.name}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'sid') {
+                        return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{emp.identifier || '—'}</td>;
+                      }
+                      if (col.key === 'role') {
+                        return <td key={col.key} className="px-3.5 py-2.5">{language === 'ar' ? emp.roleAr || emp.role : emp.role}</td>;
+                      }
+                      if (col.key === 'knowledge') {
+                        return (
+                          <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">
+                            {emp.productKnowledgeScore === null ? t('unconfiguredLabel') : `${emp.productKnowledgeScore}%`}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'productivity') {
+                        return (
+                          <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">
+                            {emp.productivityScore === null ? t('unconfiguredLabel') : `${emp.productivityScore}%`}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'csat') {
+                        return (
+                          <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">
+                            {emp.customerExperienceScore === null ? t('unconfiguredLabel') : `${emp.customerExperienceScore}%`}
+                          </td>
+                        );
+                      }
+                      if (col.key === 'coachingStatus') {
+                        return <td key={col.key} className="px-3.5 py-2.5">{emp.coachingStatus.replace('_', ' ')}</td>;
+                      }
+                      return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{emp.history.length}</td>;
+                    })}
+                    {canEdit && (
+                      <td className="px-3.5 py-2.5 text-end whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(emp)}
+                            className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                            aria-label={t('editEmployee')}
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(emp.id)}
+                            className="p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 cursor-pointer"
+                            aria-label={t('deleteRecord')}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filtered.map((emp) => (
+          {displayedEmployees.map((emp) => (
             <div
               key={emp.id}
-              className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between gap-3"
+              className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col justify-between gap-3"
             >
               <div>
                 <div className="flex items-start justify-between gap-2 mb-2">
@@ -244,11 +469,11 @@ export const StaffRosterView: React.FC = () => {
                       {language === 'ar' ? emp.nameAr || emp.name : emp.name}
                     </h3>
                     <div className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                      <span className="font-mono text-[#092d52] dark:text-teal-400 font-bold">
+                      <span className="font-mono tabular-nums text-[#092d52] dark:text-teal-400 font-bold">
                         {emp.branchCode}
                       </span>
                       <span>·</span>
-                      <span className="font-mono">{emp.identifier || 'No SID'}</span>
+                      <span className="font-mono tabular-nums">{emp.identifier || 'No SID'}</span>
                     </div>
                   </div>
 
@@ -279,7 +504,7 @@ export const StaffRosterView: React.FC = () => {
                   <span>{language === 'ar' ? emp.roleAr || emp.role : emp.role}</span>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-mono">
+                <div className="grid grid-cols-3 gap-2 text-center text-[11px] font-mono tabular-nums">
                   <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-800/60">
                     <div className="text-[10px] text-slate-400">Knowledge</div>
                     <div className="font-bold">
@@ -312,7 +537,7 @@ export const StaffRosterView: React.FC = () => {
                   <UserCheck className="w-3.5 h-3.5 text-teal-600" />
                   {emp.coachingStatus.replace('_', ' ')}
                 </span>
-                <span className="flex items-center gap-1 font-mono">
+                <span className="flex items-center gap-1 font-mono tabular-nums">
                   <Award className="w-3.5 h-3.5 text-amber-500" />
                   {emp.history.length} sessions
                 </span>
@@ -322,9 +547,10 @@ export const StaffRosterView: React.FC = () => {
         </div>
       )}
 
+      {/* Add / Edit Modal — Strict 1-Column Inputs */}
       {isModalOpen && canEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
             <div className="px-5 py-3.5 bg-[#092d52] text-white flex items-center justify-between">
               <h3 className="text-sm font-bold">
                 {editingEmp ? t('editEmployee') : t('addEmployee')}
@@ -337,88 +563,90 @@ export const StaffRosterView: React.FC = () => {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSave} className="p-5 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold mb-1">{t('empName')} *</label>
-                  <input
-                    required
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">{t('empIdentifier')}</label>
-                  <input
-                    value={identifier}
-                    onChange={(e) => setIdentifier(e.target.value)}
-                    placeholder="SID"
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold mb-1">{t('empRole')}</label>
-                  <input
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">Arabic Name</label>
-                  <input
-                    value={nameAr}
-                    onChange={(e) => setNameAr(e.target.value)}
-                    className="w-full px-3 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="block font-semibold mb-1">Knowledge %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={knowledge}
-                    onChange={(e) => setKnowledge(e.target.value)}
-                    placeholder={t('unconfiguredLabel')}
-                    className="w-full px-2.5 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">Prod. %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={productivity}
-                    onChange={(e) => setProductivity(e.target.value)}
-                    placeholder={t('unconfiguredLabel')}
-                    className="w-full px-2.5 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold mb-1">CSAT %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={csat}
-                    onChange={(e) => setCsat(e.target.value)}
-                    placeholder={t('unconfiguredLabel')}
-                    className="w-full px-2.5 min-h-[38px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
-                  />
-                </div>
+            <form onSubmit={handleSave} className="p-5 grid grid-cols-1 gap-3 overflow-y-auto text-xs">
+              <div>
+                <label className="block font-semibold mb-1">{t('empName')} *</label>
+                <input
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                />
               </div>
 
               <div>
-                <label className="block font-semibold mb-1">Notes</label>
+                <label className="block font-semibold mb-1">
+                  {language === 'ar' ? 'الاسم بالعربية' : 'Arabic Name'}
+                </label>
+                <input
+                  value={nameAr}
+                  onChange={(e) => setNameAr(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('empIdentifier')}</label>
+                <input
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  placeholder="SID"
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('empRole')}</label>
+                <input
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('knowledgeScore')} (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={knowledge}
+                  onChange={(e) => setKnowledge(e.target.value)}
+                  placeholder={t('unconfiguredLabel')}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('productivityScore')} (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={productivity}
+                  onChange={(e) => setProductivity(e.target.value)}
+                  placeholder={t('unconfiguredLabel')}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">{t('csatScore')} (%)</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={csat}
+                  onChange={(e) => setCsat(e.target.value)}
+                  placeholder={t('unconfiguredLabel')}
+                  className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold mb-1">
+                  {language === 'ar' ? 'ملاحظات' : 'Notes'}
+                </label>
                 <textarea
                   rows={2}
                   value={notes}
@@ -433,14 +661,14 @@ export const StaffRosterView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-3.5 min-h-[36px] rounded-xl bg-slate-100 dark:bg-slate-800 cursor-pointer"
+                  className="px-3.5 min-h-[38px] rounded-xl bg-slate-100 dark:bg-slate-800 cursor-pointer"
                 >
                   {t('cancel')}
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-4 min-h-[36px] rounded-xl bg-teal-600 text-white font-bold cursor-pointer"
+                  className="px-4 min-h-[38px] rounded-xl bg-teal-600 text-white font-bold cursor-pointer"
                 >
                   {saving ? '...' : t('saveRecord')}
                 </button>

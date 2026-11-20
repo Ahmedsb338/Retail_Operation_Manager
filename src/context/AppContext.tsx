@@ -86,7 +86,7 @@ interface AppContextType {
   loginBranch: (params: {
     branchName: string;
     branchCode: string;
-    accessCode: string;
+    accessCode?: string;
   }) => Promise<{ success: boolean; message?: string; retryAfterSeconds?: number }>;
   loginArea: (params: {
     username: string;
@@ -578,7 +578,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 : user.branchCode || undefined,
           })}`
         ),
-        apiRequest<{ records: any[] }>(
+        apiRequest<{ salesBoxes?: any[]; records?: any[] }>(
           `/api/v1/sales-boxes${buildQueryParams({
             branchCode:
               user.role === 'AREA_MANAGER'
@@ -597,7 +597,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setDashboardData(dashRes);
       setTasks((tasksRes.records || []).map(toFrontendTask));
       setEmployees((staffRes.staff || []).map(toFrontendEmployee));
-      setSalesBoxes((salesRes.records || []).map(toFrontendSalesBox));
+      setSalesBoxes((salesRes.salesBoxes || salesRes.records || []).map(toFrontendSalesBox));
       setCases((casesRes.records || []).map(toFrontendCase));
       setHealthWeights(weightsRes.weights || DEFAULT_HEALTH_WEIGHTS);
       setFiscalYear(fyRes);
@@ -620,7 +620,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const loginBranch = async (params: {
     branchName: string;
     branchCode: string;
-    accessCode: string;
+    accessCode?: string;
   }) => {
     try {
       const res = await apiRequest<{ user: AuthUser }>('/api/v1/auth/login-branch', {
@@ -630,6 +630,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
       setUser(res.user);
       setSelectedBranchCodeState(res.user.branchCode || '');
+      reloadBranchesCatalog().catch(() => {});
       return { success: true };
     } catch (err) {
       if (handleDbError(err)) {
@@ -690,6 +691,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setSalesBoxes([]);
     setCases([]);
     setAiAnalysis(null);
+    reloadBranchesCatalog().catch(() => {});
   };
 
   const logoutAll = async () => {
@@ -705,6 +707,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setSalesBoxes([]);
     setCases([]);
     setAiAnalysis(null);
+    reloadBranchesCatalog().catch(() => {});
   };
 
   // Computed metrics derived from database records

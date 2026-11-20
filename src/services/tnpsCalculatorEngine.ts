@@ -222,7 +222,7 @@ export const aggregateMonthlyRecords = (
   );
 
   return {
-    month: sorted[0]?.businessDate?.slice(0, 7) || '2026-11',
+    month: sorted[0]?.businessDate?.slice(0, 7) || new Date().toISOString().slice(0, 7),
     totalDaysLogged: records.length,
     totalExpectedDays: expectedWorkingDays,
     completenessPercent,

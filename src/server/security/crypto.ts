@@ -72,11 +72,11 @@ export function buildSessionCookie(
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(rawToken)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    options.secure ? 'SameSite=None' : 'SameSite=Lax',
     `Max-Age=${maxAge}`,
   ];
   if (options.secure) {
-    parts.push('Secure');
+    parts.push('Secure', 'Partitioned');
   }
   return parts.join('; ');
 }
@@ -86,11 +86,11 @@ export function buildClearSessionCookie(options: { secure: boolean }): string {
     `${SESSION_COOKIE_NAME}=`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    options.secure ? 'SameSite=None' : 'SameSite=Lax',
     'Max-Age=0',
   ];
   if (options.secure) {
-    parts.push('Secure');
+    parts.push('Secure', 'Partitioned');
   }
   return parts.join('; ');
 }

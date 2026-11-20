@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../context/AppContext';
 import { SalesBox } from '../types';
 import {
@@ -13,7 +13,28 @@ import {
   Target,
   Lock,
   AlertTriangle,
+  LayoutGrid,
+  Table2,
 } from 'lucide-react';
+import { FilterBar } from './shared/FilterBar';
+import { ExportExcelMenu, downloadXlsxSheet, type ExportFilterOptions } from './shared/ExportExcelMenu';
+import {
+  ColumnControlMenu,
+  applyColumnOrderAndVisibility,
+  applyRowControls,
+  matchesDateRange,
+  type RowSortOrder,
+} from './shared/ColumnControlMenu';
+
+const SALES_BOX_COLUMNS = [
+  { key: 'name', label: 'Box Name', labelAr: 'اسم الصندوق' },
+  { key: 'actual', label: 'Actual', labelAr: 'المحقق' },
+  { key: 'target', label: 'Target', labelAr: 'المستهدف' },
+  { key: 'achievement', label: 'Achievement %', labelAr: 'الإنجاز %' },
+  { key: 'remaining', label: 'Remaining', labelAr: 'المتبقي' },
+  { key: 'dailyRunRate', label: 'Daily Run Rate', labelAr: 'المعدل اليومي' },
+  { key: 'days', label: 'Rem. Days', labelAr: 'الأيام المتبقية' },
+];
 
 interface SalesOpportunitiesViewProps {
   isAddBoxModalOpen: boolean;
@@ -32,12 +53,24 @@ export const SalesOpportunitiesView: React.FC<SalesOpportunitiesViewProps> = ({
     addSalesBox,
     updateSalesBox,
     deleteSalesBox,
+    dateRange,
   } = useApp();
 
   const [editingBox, setEditingBox] = useState<SalesBox | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [rowLimit, setRowLimit] = useState<number>(0);
+  const [sortOrder, setSortOrder] = useState<RowSortOrder>('default');
+  const [hiddenCols, setHiddenCols] = useState<string[]>([]);
+  const [colOrder, setColOrder] = useState<string[]>(() => SALES_BOX_COLUMNS.map((c) => c.key));
+
+  const visibleColumns = useMemo(
+    () => applyColumnOrderAndVisibility(SALES_BOX_COLUMNS, colOrder, hiddenCols),
+    [colOrder, hiddenCols]
+  );
 
   const [name, setName] = useState('');
   const [nameAr, setNameAr] = useState('');
@@ -130,57 +163,185 @@ export const SalesOpportunitiesView: React.FC<SalesOpportunitiesViewProps> = ({
     }
   };
 
-  const boxesWithCalculations = salesBoxes.map((b) => {
-    const achievement = b.target > 0 ? Math.round((b.actual / b.target) * 100) : null;
-    const remaining = Math.max(0, b.target - b.actual);
-    const dailyRunRate =
-      b.target > 0 ? Math.ceil(remaining / Math.max(1, b.remainingWorkingDays)) : 0;
-    const performanceGap = b.target - b.actual;
-    return {
-      ...b,
-      achievement,
-      remaining,
-      dailyRunRate,
-      performanceGap,
-    };
-  });
+  const allCalculatedBoxes = useMemo(
+    () =>
+      salesBoxes.map((b) => {
+        const achievement = b.target > 0 ? Math.round((b.actual / b.target) * 100) : null;
+        const remaining = Math.max(0, b.target - b.actual);
+        const dailyRunRate =
+          b.target > 0 ? Math.ceil(remaining / Math.max(1, b.remainingWorkingDays)) : 0;
+        const performanceGap = b.target - b.actual;
+        const latestHistoryDate = b.dailyHistory?.[b.dailyHistory.length - 1]?.day || '';
+        return {
+          ...b,
+          achievement,
+          remaining,
+          dailyRunRate,
+          performanceGap,
+          latestHistoryDate,
+        };
+      }),
+    [salesBoxes]
+  );
+
+  const filteredBoxes = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allCalculatedBoxes.filter((b) => {
+      if ((dateRange.fromDate || dateRange.toDate) && b.dailyHistory && b.dailyHistory.length > 0) {
+        const anyMatch = b.dailyHistory.some((dh) =>
+          matchesDateRange(dh.day, dateRange.fromDate, dateRange.toDate)
+        );
+        if (!anyMatch) return false;
+      }
+      if (!q) return true;
+      return (
+        b.name.toLowerCase().includes(q) ||
+        (b.nameAr || '').toLowerCase().includes(q) ||
+        b.branchCode.toLowerCase().includes(q) ||
+        (b.unit || '').toLowerCase().includes(q)
+      );
+    });
+  }, [allCalculatedBoxes, search, dateRange.fromDate, dateRange.toDate]);
+
+  const boxesWithCalculations = useMemo(
+    () => applyRowControls(filteredBoxes, rowLimit, sortOrder, (b) => b.latestHistoryDate || ''),
+    [filteredBoxes, rowLimit, sortOrder]
+  );
+
+  const handleFilteredExport = async (opts: ExportFilterOptions) => {
+    const baseList = opts.rowScope === 'all' ? allCalculatedBoxes : boxesWithCalculations;
+    const q = opts.searchText.trim().toLowerCase();
+    const list = baseList.filter((b) => {
+      if ((opts.fromDate || opts.toDate) && b.dailyHistory && b.dailyHistory.length > 0) {
+        const anyMatch = b.dailyHistory.some((dh) =>
+          matchesDateRange(dh.day, opts.fromDate, opts.toDate)
+        );
+        if (!anyMatch) return false;
+      }
+      if (!q) return true;
+      return (
+        b.name.toLowerCase().includes(q) ||
+        (b.nameAr || '').toLowerCase().includes(q) ||
+        b.branchCode.toLowerCase().includes(q)
+      );
+    });
+
+    const cols = opts.colScope === 'visible' ? visibleColumns : SALES_BOX_COLUMNS;
+    const rows = list.map((b) => {
+      const out: Record<string, unknown> = { 'Store ID': b.branchCode };
+      for (const col of cols) {
+        const header = language === 'ar' ? col.labelAr : col.label;
+        if (col.key === 'name') out[header] = language === 'ar' ? b.nameAr || b.name : b.name;
+        else if (col.key === 'actual') out[header] = b.actual;
+        else if (col.key === 'target') out[header] = b.target;
+        else if (col.key === 'achievement') out[header] = b.achievement ?? '';
+        else if (col.key === 'remaining') out[header] = b.remaining;
+        else if (col.key === 'dailyRunRate') out[header] = b.dailyRunRate;
+        else if (col.key === 'days') out[header] = b.remainingWorkingDays;
+      }
+      return out;
+    });
+    await downloadXlsxSheet('sales_boxes.xlsx', 'SalesBoxes', rows);
+  };
 
   const boxesNeedingAttention = boxesWithCalculations.filter(
     (b) => b.achievement !== null && b.achievement < 75
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            {t('salesTitle')}
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            {t('salesSubtitle')}
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2 self-start sm:self-auto">
-          {!canEdit && (
-            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-800 text-xs font-semibold">
-              <Lock className="w-3.5 h-3.5" />
-              <span>{t('readOnlyBadge')}</span>
-            </div>
-          )}
-          {canEdit && (
-            <button
-              type="button"
-              onClick={openAddModal}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl bg-teal-600 hover:bg-teal-500 text-white shadow-sm cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>{t('addBox')}</span>
-            </button>
-          )}
-        </div>
+      <div className="pb-2 border-b border-slate-200 dark:border-slate-800">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+          {t('salesTitle')}
+        </h1>
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          {t('salesSubtitle')}
+        </p>
       </div>
+
+      {!canEdit && (
+        <div className="p-3 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-300 flex items-center gap-2">
+          <Lock className="w-4 h-4 text-[#092d52] dark:text-teal-400 shrink-0" />
+          <span>{t('readOnlyNotice')}</span>
+        </div>
+      )}
+
+      {/* Single-Row Toolbar */}
+      <FilterBar
+        search={search}
+        onSearchChange={setSearch}
+        showDateFilters
+        exportMenu={
+          <ExportExcelMenu
+            onExport={handleFilteredExport}
+            defaultFromDate={dateRange.fromDate}
+            defaultToDate={dateRange.toDate}
+            defaultSearchText={search}
+          />
+        }
+        onAddNew={canEdit ? openAddModal : undefined}
+        addLabel={t('addRecord')}
+        rightActions={
+          <div className="flex flex-nowrap items-center gap-1.5 shrink-0">
+            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200 dark:border-slate-700 shrink-0">
+              <button
+                type="button"
+                onClick={() => setViewMode('cards')}
+                className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                  viewMode === 'cards'
+                    ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                    : 'text-slate-500'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>{t('cardsView')}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('table')}
+                className={`inline-flex items-center gap-1 px-2 min-h-[30px] rounded-lg text-xs font-semibold cursor-pointer whitespace-nowrap ${
+                  viewMode === 'table'
+                    ? 'bg-white dark:bg-slate-900 text-[#092d52] dark:text-teal-300'
+                    : 'text-slate-500'
+                }`}
+              >
+                <Table2 className="w-3.5 h-3.5" />
+                <span>{t('tableView')}</span>
+              </button>
+            </div>
+
+            <ColumnControlMenu
+              columns={SALES_BOX_COLUMNS}
+              hiddenKeys={hiddenCols}
+              columnOrder={colOrder}
+              onToggleColumn={(key) =>
+                setHiddenCols((prev) =>
+                  prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+                )
+              }
+              onMoveColumn={(key, dir) => {
+                const idx = colOrder.indexOf(key);
+                const swap = dir === 'up' ? idx - 1 : idx + 1;
+                if (idx < 0 || swap < 0 || swap >= colOrder.length) return;
+                const next = [...colOrder];
+                [next[idx], next[swap]] = [next[swap], next[idx]];
+                setColOrder(next);
+              }}
+              onResetColumns={() => {
+                setHiddenCols([]);
+                setColOrder(SALES_BOX_COLUMNS.map((c) => c.key));
+              }}
+              rowLimit={rowLimit}
+              onRowLimitChange={setRowLimit}
+              sortOrder={sortOrder}
+              onSortOrderChange={setSortOrder}
+              onAddRow={canEdit ? openAddModal : undefined}
+              totalRowsCount={filteredBoxes.length}
+            />
+          </div>
+        }
+      />
 
       {/* Policy Note */}
       <div className="flex items-center gap-2 p-3 rounded-xl bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs text-slate-600 dark:text-slate-400">
@@ -230,10 +391,72 @@ export const SalesOpportunitiesView: React.FC<SalesOpportunitiesViewProps> = ({
         </div>
       )}
 
-      {/* Sales Boxes Grid */}
+      {/* Sales Boxes Grid / Table */}
       {boxesWithCalculations.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-          {t('noRecords')}
+        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3">
+          <p className="text-xs text-slate-500">{t('noRecords')}</p>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={openAddModal}
+              className="inline-flex items-center gap-1.5 px-4 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('addRecord')}</span>
+            </button>
+          )}
+        </div>
+      ) : viewMode === 'table' ? (
+        <div className="rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-[#092d52] text-white">
+                <tr>
+                  <th className="px-3.5 py-2.5 text-start font-semibold whitespace-nowrap">Store ID</th>
+                  {visibleColumns.map((col) => (
+                    <th key={col.key} className="px-3.5 py-2.5 text-start font-semibold whitespace-nowrap">
+                      {language === 'ar' ? col.labelAr : col.label}
+                    </th>
+                  ))}
+                  {canEdit && (
+                    <th className="px-3.5 py-2.5 text-end font-semibold whitespace-nowrap">
+                      {language === 'ar' ? 'إجراءات' : 'Actions'}
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {boxesWithCalculations.map((box) => (
+                  <tr key={box.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                    <td className="px-3.5 py-2.5 font-mono tabular-nums font-bold text-[#092d52] dark:text-teal-400">
+                      {box.branchCode}
+                    </td>
+                    {visibleColumns.map((col) => {
+                      if (col.key === 'name') return <td key={col.key} className="px-3.5 py-2.5 font-semibold">{language === 'ar' ? box.nameAr || box.name : box.name}</td>;
+                      if (col.key === 'actual') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{box.actual.toLocaleString()}</td>;
+                      if (col.key === 'target') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{box.target > 0 ? box.target.toLocaleString() : t('unconfigured')}</td>;
+                      if (col.key === 'achievement') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums font-bold">{box.achievement === null ? t('unconfigured') : `${box.achievement}%`}</td>;
+                      if (col.key === 'remaining') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{box.target > 0 ? box.remaining.toLocaleString() : t('unconfigured')}</td>;
+                      if (col.key === 'dailyRunRate') return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{box.target > 0 ? box.dailyRunRate : t('unconfigured')}</td>;
+                      return <td key={col.key} className="px-3.5 py-2.5 font-mono tabular-nums">{box.remainingWorkingDays}</td>;
+                    })}
+                    {canEdit && (
+                      <td className="px-3.5 py-2.5 text-end whitespace-nowrap">
+                        <div className="inline-flex items-center gap-1">
+                          <button type="button" onClick={() => openEditModal(box)} className="p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer">
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button type="button" onClick={() => setConfirmDeleteId(box.id)} className="p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 cursor-pointer">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -427,7 +650,7 @@ export const SalesOpportunitiesView: React.FC<SalesOpportunitiesViewProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSaveBox} className="space-y-4">
+            <form onSubmit={handleSaveBox} className="grid grid-cols-1 gap-3 max-h-[75vh] overflow-y-auto">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {t('boxName')} (EN)
@@ -437,7 +660,7 @@ export const SalesOpportunitiesView: React.FC<SalesOpportunitiesViewProps> = ({
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                 />
               </div>
 
@@ -449,81 +672,77 @@ export const SalesOpportunitiesView: React.FC<SalesOpportunitiesViewProps> = ({
                   type="text"
                   value={nameAr}
                   onChange={(e) => setNameAr(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
                   dir="rtl"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('boxTarget')}
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    required
-                    value={target}
-                    onChange={(e) => setTarget(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('boxActual')}
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    required
-                    value={actual}
-                    onChange={(e) => setActual(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {t('boxTarget')}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  required
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('boxUnit')}
-                  </label>
-                  <input
-                    type="text"
-                    value={unit}
-                    onChange={(e) => setUnit(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {t('boxActual')}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  required
+                  value={actual}
+                  onChange={(e) => setActual(e.target.value)}
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                />
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    {t('remainingWorkingDays')}
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={remainingWorkingDays}
-                    onChange={(e) => setRemainingWorkingDays(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {t('boxUnit')}
+                </label>
+                <input
+                  type="text"
+                  value={unit}
+                  onChange={(e) => setUnit(e.target.value)}
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                />
+              </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    Trend
-                  </label>
-                  <select
-                    value={trend}
-                    onChange={(e) => setTrend(e.target.value as 'up' | 'down' | 'stable')}
-                    className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-                  >
-                    <option value="up">Up</option>
-                    <option value="stable">Stable</option>
-                    <option value="down">Down</option>
-                  </select>
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  {t('remainingWorkingDays')}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={remainingWorkingDays}
+                  onChange={(e) => setRemainingWorkingDays(e.target.value)}
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Trend
+                </label>
+                <select
+                  value={trend}
+                  onChange={(e) => setTrend(e.target.value as 'up' | 'down' | 'stable')}
+                  className="w-full px-3 min-h-[40px] text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                >
+                  <option value="up">Up</option>
+                  <option value="stable">Stable</option>
+                  <option value="down">Down</option>
+                </select>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">

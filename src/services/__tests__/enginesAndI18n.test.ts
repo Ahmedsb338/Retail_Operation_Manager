@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as XLSX from 'xlsx';
 import {
   calculateRE,
   computeItemMetrics,
@@ -20,6 +21,7 @@ import {
   matchesDateOverlapFilter,
   monthlyAverageAchievement,
 } from '../../server/services/domainCalculations.ts';
+import { parseSpreadsheetBuffer } from '../../server/services/csvXlsx.ts';
 import { translations } from '../../i18n/translations.ts';
 
 describe('Calculation Engines, Domain Aggregations & EN/AR Translation Parity', () => {
@@ -50,7 +52,7 @@ describe('Calculation Engines, Domain Aggregations & EN/AR Translation Parity', 
 
     const msgUnconfigured = generateWhatsAppMessage({
       storeName: '1750 - Abo ElMatamer',
-      dateStr: '2026-11-03',
+      dateStr: '2026-11-19',
       computedItems,
       acqBox: { todayAch: 4, dailyTarget: 4, mtdAchievement: 60, monthlyTarget: 100 },
       terminalBox: { todayAch: 0, dailyTarget: 0, mtdAchievement: 0, monthlyTarget: 0 },
@@ -68,7 +70,7 @@ describe('Calculation Engines, Domain Aggregations & EN/AR Translation Parity', 
 
     const msgNumeric = generateWhatsAppMessage({
       storeName: '1750 - Abo ElMatamer',
-      dateStr: '2026-11-03',
+      dateStr: '2026-11-19',
       computedItems,
       acqBox: { todayAch: 4, dailyTarget: 4, mtdAchievement: 60, monthlyTarget: 100 },
       terminalBox: { todayAch: 0, dailyTarget: 0, mtdAchievement: 0, monthlyTarget: 0 },
@@ -176,6 +178,42 @@ describe('Calculation Engines, Domain Aggregations & EN/AR Translation Parity', 
       { month: '2026-12', pillar: 'Acquisition', actual: 40, target: null },
     ]);
     assert.equal(avg, 125);
+  });
+
+  it('parses all Excel and delimited spreadsheet formats (.xlsx, .xls, semicolon CSV, tab TSV)', async () => {
+    const sampleRows = [
+      ['Date', 'Agent Name', 'Score'],
+      [new Date('2026-11-19T00:00:00Z'), 'Ahmed Ali', 92],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(sampleRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Sheet1');
+
+    const xlsxBuf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+    const parsedXlsx = await parseSpreadsheetBuffer(xlsxBuf, 'xlsx', 'report.xlsx');
+    assert.equal(parsedXlsx.length, 2);
+    assert.deepEqual(parsedXlsx[0], ['Date', 'Agent Name', 'Score']);
+    assert.equal(parsedXlsx[1][1], 'Ahmed Ali');
+    assert.equal(parsedXlsx[1][2], '92');
+
+    const xlsBuf = XLSX.write(wb, { type: 'buffer', bookType: 'biff8' }) as Buffer;
+    const parsedXls = await parseSpreadsheetBuffer(xlsBuf, 'xls', 'legacy.xls');
+    assert.equal(parsedXls.length, 2);
+    assert.equal(parsedXls[1][1], 'Ahmed Ali');
+
+    const semiCsv = Buffer.from('\uFEFFAgent Name;Score;Date\r\nSara;88;2026-11-19', 'utf8');
+    const parsedSemi = await parseSpreadsheetBuffer(semiCsv, 'csv', 'eu.csv');
+    assert.deepEqual(parsedSemi, [
+      ['Agent Name', 'Score', 'Date'],
+      ['Sara', '88', '2026-11-19'],
+    ]);
+
+    const tsvBuf = Buffer.from('Agent Name\tScore\nOmar\t95', 'utf8');
+    const parsedTsv = await parseSpreadsheetBuffer(tsvBuf, 'tsv', 'export.tsv');
+    assert.deepEqual(parsedTsv, [
+      ['Agent Name', 'Score'],
+      ['Omar', '95'],
+    ]);
   });
 
   it('maintains 100% EN/AR translation key parity with zero empty strings', () => {

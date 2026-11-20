@@ -1,9 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Edit2, Trash2, X, Lock, AlertCircle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Edit2, Trash2, X, Lock, AlertCircle, CheckCircle2, Plus } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { apiDownloadFile, apiRequest, buildQueryParams } from '../../services/apiClient';
 import { FilterBar } from './FilterBar';
 import { ImportSummaryModal } from './ImportSummaryModal';
+import { ExportExcelMenu, downloadXlsxSheet, type ExportFilterOptions } from './ExportExcelMenu';
+import {
+  ColumnControlMenu,
+  applyColumnOrderAndVisibility,
+  applyRowControls,
+  matchesDateRange,
+  type RowSortOrder,
+} from './ColumnControlMenu';
 
 export interface FieldDefinition {
   key: string;
@@ -26,6 +34,11 @@ export interface ColumnDefinition<T = Record<string, any>> {
   render?: (row: T, language: 'en' | 'ar', unconfiguredText: string) => React.ReactNode;
 }
 
+interface CustomColumnDef {
+  key: string;
+  label: string;
+}
+
 interface OperationalTableModuleProps {
   title: string;
   titleAr: string;
@@ -39,6 +52,37 @@ interface OperationalTableModuleProps {
   importHeadersHint?: string;
   showDateFilters?: boolean;
   topSlot?: React.ReactNode;
+  metaField?: 'notes' | 'reason' | 'remarks';
+}
+
+const CUSTOM_PREFIX = '__custom__:';
+
+function parseCustomMeta(rawMeta: string): {
+  baseText: string;
+  customValues: Record<string, string>;
+} {
+  const customValues: Record<string, string> = {};
+  const keptLines: string[] = [];
+  for (const line of String(rawMeta || '').split('\n')) {
+    const match = line.match(/^\[COL:([^\]]+)\]\s*(.*)$/);
+    if (match) {
+      customValues[match[1].trim()] = match[2];
+    } else {
+      keptLines.push(line);
+    }
+  }
+  return {
+    baseText: keptLines.join('\n').trim(),
+    customValues,
+  };
+}
+
+function serializeCustomMeta(baseText: string, customValues: Record<string, string>): string {
+  const cleanBase = baseText.trim();
+  const customLines = Object.entries(customValues)
+    .filter(([, val]) => val.trim() !== '')
+    .map(([colLabel, val]) => `[COL:${colLabel}] ${val.trim()}`);
+  return [cleanBase, ...customLines].filter(Boolean).join('\n');
 }
 
 export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
@@ -54,6 +98,7 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
   importHeadersHint,
   showDateFilters = true,
   topSlot,
+  metaField,
 }) => {
   const {
     language,
@@ -77,6 +122,44 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [rowLimit, setRowLimit] = useState<number>(0);
+  const [sortOrder, setSortOrder] = useState<RowSortOrder>('default');
+
+  const storageKey = `asb_cols_${endpoint.replace(/[^a-z0-9]+/gi, '_')}`;
+  const [hiddenCols, setHiddenCols] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${storageKey}_hidden`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [colOrder, setColOrder] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${storageKey}_order`);
+      return saved ? JSON.parse(saved) : columns.map((c) => c.key);
+    } catch {
+      return columns.map((c) => c.key);
+    }
+  });
+  const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${storageKey}_custom`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`${storageKey}_hidden`, JSON.stringify(hiddenCols));
+      localStorage.setItem(`${storageKey}_order`, JSON.stringify(colOrder));
+      localStorage.setItem(`${storageKey}_custom`, JSON.stringify(customColumns));
+    } catch {
+      // ignore storage errors
+    }
+  }, [storageKey, hiddenCols, colOrder, customColumns]);
 
   const branchQueryParam =
     user?.role === 'AREA_MANAGER'
@@ -106,18 +189,123 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
     fetchRecords();
   }, [fetchRecords]);
 
+  // Discover any custom column labels present in loaded records even if not yet added locally
+  const mergedCustomColumns = useMemo(() => {
+    const map = new Map<string, CustomColumnDef>();
+    for (const c of customColumns) {
+      map.set(c.key, c);
+    }
+    if (metaField) {
+      for (const row of records) {
+        const { customValues } = parseCustomMeta(String(row[metaField] ?? ''));
+        for (const label of Object.keys(customValues)) {
+          const key = `${CUSTOM_PREFIX}${label}`;
+          if (!map.has(key)) {
+            map.set(key, { key, label });
+          }
+        }
+      }
+    }
+    return Array.from(map.values());
+  }, [customColumns, metaField, records]);
+
+  const allColumns: Array<ColumnDefinition & { isCustom?: boolean }> = useMemo(() => {
+    const customDefs: Array<ColumnDefinition & { isCustom?: boolean }> = mergedCustomColumns.map(
+      (c) => ({
+        key: c.key,
+        label: c.label,
+        labelAr: c.label,
+        isCustom: true,
+        render: (row) => {
+          if (!metaField) return <span className="text-slate-400">—</span>;
+          const { customValues } = parseCustomMeta(String(row[metaField] ?? ''));
+          const val = customValues[c.label];
+          return val ? <span>{val}</span> : <span className="text-slate-400">—</span>;
+        },
+      })
+    );
+    return [...columns, ...customDefs];
+  }, [columns, mergedCustomColumns, metaField]);
+
+  const visibleColumns = useMemo(
+    () => applyColumnOrderAndVisibility(allColumns, colOrder, hiddenCols),
+    [allColumns, colOrder, hiddenCols]
+  );
+
+  const displayedRecords = useMemo(
+    () =>
+      applyRowControls(records, rowLimit, sortOrder, (r) =>
+        String(r.date || r.month || r.createdAt || '')
+      ),
+    [records, rowLimit, sortOrder]
+  );
+
+  const handleToggleColumn = (key: string) => {
+    setHiddenCols((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    );
+  };
+
+  const handleMoveColumn = (key: string, direction: 'up' | 'down') => {
+    const allKeys = allColumns.map((c) => c.key);
+    const currentOrder = [
+      ...colOrder.filter((k) => allKeys.includes(k)),
+      ...allKeys.filter((k) => !colOrder.includes(k)),
+    ];
+    const idx = currentOrder.indexOf(key);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= currentOrder.length) return;
+    const next = [...currentOrder];
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    setColOrder(next);
+  };
+
+  const handleResetColumns = () => {
+    setHiddenCols([]);
+    setColOrder(columns.map((c) => c.key));
+    setCustomColumns([]);
+  };
+
+  const handleAddCustomColumn = (label: string) => {
+    const clean = label.replace(/[\[\]\n\r]/g, '').trim();
+    if (!clean) return;
+    const key = `${CUSTOM_PREFIX}${clean}`;
+    if (allColumns.some((c) => c.key === key)) return;
+    setCustomColumns((prev) => [...prev, { key, label: clean }]);
+    setColOrder((prev) => [...prev, key]);
+  };
+
+  const handleRemoveCustomColumn = (key: string) => {
+    setCustomColumns((prev) => prev.filter((c) => c.key !== key));
+    setHiddenCols((prev) => prev.filter((k) => k !== key));
+    setColOrder((prev) => prev.filter((k) => k !== key));
+  };
+
   const handleOpenAdd = () => {
     setEditingRow(null);
-    setFormState(defaultNewValues());
+    const defaults = defaultNewValues();
+    for (const c of mergedCustomColumns) {
+      defaults[c.key] = '';
+    }
+    setFormState(defaults);
     setFormError(null);
     setIsAddOpen(true);
   };
 
   const handleOpenEdit = (row: Record<string, any>) => {
     const initial: Record<string, any> = {};
+    const parsedMeta = metaField ? parseCustomMeta(String(row[metaField] ?? '')) : null;
     for (const f of fields) {
-      const val = row[f.key];
-      initial[f.key] = val === null || val === undefined ? '' : String(val);
+      if (metaField && f.key === metaField && parsedMeta) {
+        initial[f.key] = parsedMeta.baseText;
+      } else {
+        const val = row[f.key];
+        initial[f.key] = val === null || val === undefined ? '' : String(val);
+      }
+    }
+    for (const c of mergedCustomColumns) {
+      initial[c.key] = parsedMeta?.customValues[c.label] ?? '';
     }
     setEditingRow(row);
     setFormState(initial);
@@ -141,6 +329,15 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
         payload[f.key] = String(raw ?? '');
       }
     }
+
+    if (metaField) {
+      const customValues: Record<string, string> = {};
+      for (const c of mergedCustomColumns) {
+        customValues[c.label] = String(formState[c.key] ?? '');
+      }
+      payload[metaField] = serializeCustomMeta(String(payload[metaField] ?? ''), customValues);
+    }
+
     return payload;
   };
 
@@ -188,6 +385,10 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
     if (col.render) {
       return col.render(row, language, t('unconfiguredLabel'));
     }
+    if (metaField && col.key === metaField) {
+      const { baseText } = parseCustomMeta(String(row[metaField] ?? ''));
+      return baseText ? <span>{baseText}</span> : <span className="text-slate-400">—</span>;
+    }
     const val = row[col.key];
     if (col.isNullableMetric) {
       if (val === null || val === undefined || val === '') {
@@ -198,7 +399,7 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
         );
       }
       return (
-        <span className="font-mono font-semibold text-slate-900 dark:text-slate-100">
+        <span className="font-mono tabular-nums font-semibold text-slate-900 dark:text-slate-100">
           {val}
           {col.suffix || ''}
         </span>
@@ -208,22 +409,78 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
       return <span className="text-slate-400">—</span>;
     }
     return (
-      <span className={col.isNumeric ? 'font-mono font-medium' : ''}>
+      <span className={col.isNumeric ? 'font-mono tabular-nums font-medium' : ''}>
         {String(val)}
         {col.suffix || ''}
       </span>
     );
   };
 
-  const handleExport = async (format: 'csv' | 'xlsx') => {
-    const qs = buildQueryParams({
-      branchCode: branchQueryParam,
-      fromDate: dateRange.fromDate || undefined,
-      toDate: dateRange.toDate || undefined,
-      search: search || undefined,
-      format,
+  const handleFilteredExport = async (opts: ExportFilterOptions) => {
+    const isDefaultFullExport =
+      opts.rowScope === 'all' &&
+      opts.colScope === 'all' &&
+      !opts.searchText.trim();
+
+    if (isDefaultFullExport) {
+      const qs = buildQueryParams({
+        branchCode: branchQueryParam,
+        fromDate: opts.fromDate || undefined,
+        toDate: opts.toDate || undefined,
+        format: 'xlsx',
+      });
+      await apiDownloadFile(`${endpoint}/export${qs}`, `${exportFilename}.xlsx`);
+      return;
+    }
+
+    let sourceRows = records;
+    if (opts.rowScope === 'all') {
+      const qs = buildQueryParams({
+        branchCode: branchQueryParam,
+        fromDate: opts.fromDate || undefined,
+        toDate: opts.toDate || undefined,
+      });
+      const res = await apiRequest<{ records: Array<Record<string, any>> }>(`${endpoint}${qs}`);
+      sourceRows = res.records || [];
+    } else {
+      sourceRows = displayedRecords;
+    }
+
+    const q = opts.searchText.trim().toLowerCase();
+    const filteredForExport = sourceRows.filter((row) => {
+      const rowDate = String(row.date || row.month || row.createdAt || '');
+      if (showDateFilters && !matchesDateRange(rowDate, opts.fromDate, opts.toDate)) {
+        return false;
+      }
+      if (!q) return true;
+      return Object.values(row).some((val) =>
+        String(val ?? '').toLowerCase().includes(q)
+      );
     });
-    await apiDownloadFile(`${endpoint}/export${qs}`, `${exportFilename}.${format}`);
+
+    const colsToExport = opts.colScope === 'visible' ? visibleColumns : allColumns;
+    const sheetRows = filteredForExport.map((row) => {
+      const out: Record<string, unknown> = {
+        'Store ID': row.branchCode || '',
+      };
+      for (const col of colsToExport) {
+        const header = language === 'ar' ? col.labelAr || col.label : col.label;
+        if (metaField && col.key.startsWith(CUSTOM_PREFIX)) {
+          const customLabel = col.key.replace(CUSTOM_PREFIX, '');
+          const { customValues } = parseCustomMeta(String(row[metaField] ?? ''));
+          out[header] = customValues[customLabel] ?? '';
+        } else if (metaField && col.key === metaField) {
+          const { baseText } = parseCustomMeta(String(row[metaField] ?? ''));
+          out[header] = baseText;
+        } else {
+          const val = row[col.key];
+          out[header] = val === null || val === undefined ? '' : val;
+        }
+      }
+      return out;
+    });
+
+    await downloadXlsxSheet(`${exportFilename}.xlsx`, title.slice(0, 31), sheetRows);
   };
 
   return (
@@ -235,22 +492,13 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            {language === 'ar' ? titleAr : title}
-          </h1>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            {language === 'ar' ? subtitleAr : subtitle}
-          </p>
-        </div>
-
-        {!canEdit && (
-          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-700 dark:text-slate-200 self-start">
-            <Lock className="w-3.5 h-3.5 text-[#092d52] dark:text-teal-400" />
-            <span>{t('readOnlyBadge')}</span>
-          </div>
-        )}
+      <div className="pb-2 border-b border-slate-200 dark:border-slate-800">
+        <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+          {language === 'ar' ? titleAr : title}
+        </h1>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+          {language === 'ar' ? subtitleAr : subtitle}
+        </p>
       </div>
 
       {!canEdit && (
@@ -266,11 +514,41 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
         search={search}
         onSearchChange={setSearch}
         showDateFilters={showDateFilters}
-        onExportCsv={() => handleExport('csv')}
-        onExportXlsx={() => handleExport('xlsx')}
+        exportMenu={
+          <ExportExcelMenu
+            onExport={handleFilteredExport}
+            defaultFromDate={dateRange.fromDate}
+            defaultToDate={dateRange.toDate}
+            defaultSearchText={search}
+          />
+        }
         onOpenImport={canEdit ? () => setShowImport(true) : undefined}
         onAddNew={canEdit ? handleOpenAdd : undefined}
         addLabel={t('addRecord')}
+        rightActions={
+          <ColumnControlMenu
+            columns={allColumns.map((c) => ({
+              key: c.key,
+              label: c.label,
+              labelAr: c.labelAr,
+              isCustom: c.isCustom,
+            }))}
+            hiddenKeys={hiddenCols}
+            columnOrder={colOrder}
+            onToggleColumn={handleToggleColumn}
+            onMoveColumn={handleMoveColumn}
+            onResetColumns={handleResetColumns}
+            allowCustomColumns={Boolean(metaField) && canEdit}
+            onAddCustomColumn={handleAddCustomColumn}
+            onRemoveCustomColumn={handleRemoveCustomColumn}
+            rowLimit={rowLimit}
+            onRowLimitChange={setRowLimit}
+            sortOrder={sortOrder}
+            onSortOrderChange={setSortOrder}
+            onAddRow={canEdit ? handleOpenAdd : undefined}
+            totalRowsCount={records.length}
+          />
+        }
       />
 
       {error && (
@@ -285,24 +563,34 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
           {language === 'ar' ? 'جارٍ تحميل السجلات...' : 'Loading records...'}
         </div>
       ) : records.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-2">
+        <div className="p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-center space-y-3">
           <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
             {language === 'ar' ? 'لا توجد سجلات مطابقة بعد' : 'No matching records found'}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {canEdit
               ? language === 'ar'
-                ? 'أضف سجلاً جديداً أو استورد ملف CSV / Excel.'
-                : 'Add a new record or import a CSV / Excel file.'
+                ? 'أضف سجلاً جديداً أو استورد ملف Excel / CSV.'
+                : 'Add a new record or import an Excel / CSV file.'
               : language === 'ar'
                 ? 'جرّب تغيير نطاق التاريخ أو اختيار فرع آخر.'
                 : 'Try adjusting the date range or branch filter.'}
           </p>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={handleOpenAdd}
+              className="inline-flex items-center gap-1.5 px-4 min-h-[38px] rounded-xl text-xs font-bold bg-teal-600 hover:bg-teal-500 text-white cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>{t('addRecord')}</span>
+            </button>
+          )}
         </div>
       ) : (
         <>
           {/* Desktop Table */}
-          <div className="hidden md:block rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+          <div className="hidden md:block rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 overflow-hidden">
             <div className="overflow-x-auto custom-scrollbar">
               <table className="w-full text-xs text-start">
                 <thead className="bg-[#092d52] text-white">
@@ -310,7 +598,7 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
                     <th className="px-3.5 py-2.5 font-semibold text-start whitespace-nowrap">
                       {language === 'ar' ? 'كود الفرع' : 'Store ID'}
                     </th>
-                    {columns.map((col) => (
+                    {visibleColumns.map((col) => (
                       <th
                         key={col.key}
                         className="px-3.5 py-2.5 font-semibold text-start whitespace-nowrap"
@@ -326,15 +614,15 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {records.map((row) => (
+                  {displayedRecords.map((row) => (
                     <tr
                       key={row.id}
                       className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
                     >
-                      <td className="px-3.5 py-2.5 font-mono font-bold text-[#092d52] dark:text-teal-400 whitespace-nowrap">
+                      <td className="px-3.5 py-2.5 font-mono tabular-nums font-bold text-[#092d52] dark:text-teal-400 whitespace-nowrap">
                         {row.branchCode}
                       </td>
-                      {columns.map((col) => (
+                      {visibleColumns.map((col) => (
                         <td
                           key={col.key}
                           className="px-3.5 py-2.5 text-slate-800 dark:text-slate-200 max-w-[260px] truncate"
@@ -374,13 +662,13 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
 
           {/* Mobile Card List (No horizontal scroll overflow) */}
           <div className="md:hidden space-y-2.5">
-            {records.map((row) => (
+            {displayedRecords.map((row) => (
               <div
                 key={row.id}
-                className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs space-y-2"
+                className="p-3.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 space-y-2"
               >
                 <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-slate-100 dark:border-slate-800">
-                  <span className="font-mono text-xs font-bold text-[#092d52] dark:text-teal-400">
+                  <span className="font-mono tabular-nums text-xs font-bold text-[#092d52] dark:text-teal-400">
                     Store {row.branchCode}
                   </span>
                   {canEdit && (
@@ -403,15 +691,15 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
                   )}
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
-                  {columns.map((col) => (
-                    <div key={col.key} className="min-w-0">
-                      <div className="text-[10px] font-semibold text-slate-400 truncate">
+                <div className="grid grid-cols-1 gap-y-1.5 text-xs">
+                  {visibleColumns.map((col) => (
+                    <div key={col.key} className="min-w-0 flex items-baseline justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-slate-500 shrink-0">
                         {language === 'ar' ? col.labelAr : col.label}
-                      </div>
-                      <div className="text-slate-800 dark:text-slate-200 truncate">
+                      </span>
+                      <span className="text-slate-800 dark:text-slate-200 truncate text-end">
                         {renderCell(col, row)}
-                      </div>
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -421,7 +709,7 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
         </>
       )}
 
-      {/* Add / Edit Modal */}
+      {/* Add / Edit Modal — Strict 1-Column Inputs */}
       {isAddOpen && canEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 backdrop-blur-xs p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
@@ -439,7 +727,7 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleSubmit} className="p-5 space-y-3 overflow-y-auto text-xs">
+            <form onSubmit={handleSubmit} className="p-5 grid grid-cols-1 gap-3 overflow-y-auto text-xs">
               {fields.map((f) => (
                 <div key={f.key}>
                   <label className="block font-semibold text-slate-700 dark:text-slate-200 mb-1">
@@ -498,6 +786,23 @@ export const OperationalTableModule: React.FC<OperationalTableModuleProps> = ({
                   )}
                 </div>
               ))}
+
+              {metaField &&
+                mergedCustomColumns.map((col) => (
+                  <div key={col.key}>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-200 mb-1">
+                      {col.label}
+                    </label>
+                    <input
+                      type="text"
+                      value={formState[col.key] ?? ''}
+                      onChange={(e) =>
+                        setFormState({ ...formState, [col.key]: e.target.value })
+                      }
+                      className="w-full px-3 min-h-[40px] rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white"
+                    />
+                  </div>
+                ))}
 
               {formError && (
                 <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200">
