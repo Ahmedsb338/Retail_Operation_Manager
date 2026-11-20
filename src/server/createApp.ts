@@ -158,6 +158,10 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
       'ENOTFOUND',
       'ETIMEDOUT',
       'EAI_AGAIN',
+      'ENETUNREACH',
+      'EHOSTUNREACH',
+      'ECONNRESET',
+      'ERR_INVALID_URL',
     ]);
 
     if (dbUnavailableCodes.has(pgCode)) {
@@ -172,6 +176,30 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
         error: detail,
         code: 'DATABASE_UNAVAILABLE',
         pgCode,
+      });
+      return;
+    }
+
+    const httpErr = err as {
+      status?: unknown;
+      statusCode?: unknown;
+      type?: unknown;
+      message?: unknown;
+    };
+    const rawStatus =
+      typeof httpErr?.status === 'number'
+        ? httpErr.status
+        : typeof httpErr?.statusCode === 'number'
+          ? httpErr.statusCode
+          : 0;
+
+    if (rawStatus >= 400 && rawStatus < 500) {
+      res.status(rawStatus).json({
+        error:
+          typeof httpErr.message === 'string' && httpErr.message
+            ? httpErr.message
+            : `Request failed (${rawStatus}).`,
+        ...(typeof httpErr.type === 'string' ? { code: httpErr.type } : {}),
       });
       return;
     }

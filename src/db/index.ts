@@ -23,6 +23,20 @@ export interface EnvLike {
   [key: string]: string | undefined;
 }
 
+export function isValidPostgresConnectionString(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (/^postgres(?:ql)?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return Boolean(parsed.hostname);
+    } catch {
+      return false;
+    }
+  }
+  return /(?:^|\s)host=\S+/i.test(trimmed);
+}
+
 export function resolveConnectionString(env: EnvLike = process.env): string {
   const candidates = [env.DATABASE_URL, env.POSTGRES_URL, env.SUPABASE_DB_URL];
   for (const val of candidates) {
@@ -49,8 +63,11 @@ export function detectSupabaseRestOnlyConfig(env: EnvLike = process.env): boolea
 }
 
 export function getMissingDatabaseEnvVars(env: EnvLike = process.env): string[] {
-  if (resolveConnectionString(env) !== '') {
-    return [];
+  const connStr = resolveConnectionString(env);
+  if (connStr !== '') {
+    return isValidPostgresConnectionString(connStr)
+      ? []
+      : ['DATABASE_URL (must be a valid postgresql:// or postgres:// URI)'];
   }
   const required = ['SQL_HOST', 'SQL_DB_NAME', 'SQL_USER', 'SQL_PASSWORD'] as const;
   return required.filter((key) => !env[key] || String(env[key]).trim() === '');

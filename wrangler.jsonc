@@ -1,9 +1,12 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "ahmedsb338",
+  "name": "retail-operation-manager",
   "main": "src/worker.ts",
   "compatibility_date": "2026-03-01",
   "compatibility_flags": ["nodejs_compat"],
+  "alias": {
+    "iconv-lite": "./src/worker-shims/iconv-lite.ts"
+  },
   "observability": {
     "enabled": true
   },

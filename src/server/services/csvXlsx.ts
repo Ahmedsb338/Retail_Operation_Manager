@@ -36,33 +36,49 @@ export async function serializeToXlsxBuffer(
   headers: string[],
   rows: Array<Record<string, unknown>>
 ): Promise<Buffer> {
-  const ExcelJS = await loadExcelJS();
-  const workbook = new ExcelJS.Workbook();
   const safeSheet = sheetName.slice(0, 31).replace(/[\\/*?:[\]]/g, '_') || 'Export';
-  const worksheet = workbook.addWorksheet(safeSheet);
-  worksheet.addRow(headers);
+  const sanitizedRows = rows.map((row) =>
+    headers.map((h) => {
+      const val = row[h];
+      if (val === null || val === undefined) return '';
+      if (typeof val === 'string' && /^[=+\-@\t\r]/.test(val)) return `'${val}`;
+      return val;
+    })
+  );
 
-  const headerRow = worksheet.getRow(1);
-  headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-  headerRow.fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: { argb: 'FF092D52' },
-  };
+  try {
+    const ExcelJS = await loadExcelJS();
+    if (ExcelJS?.Workbook) {
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet(safeSheet);
+      worksheet.addRow(headers);
 
-  for (const row of rows) {
-    worksheet.addRow(
-      headers.map((h) => {
-        const val = row[h];
-        if (val === null || val === undefined) return '';
-        if (typeof val === 'string' && /^[=+\-@\t\r]/.test(val)) return `'${val}`;
-        return val;
-      })
-    );
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF092D52' },
+      };
+
+      for (const vals of sanitizedRows) {
+        worksheet.addRow(vals);
+      }
+
+      const arrayBuffer = await workbook.xlsx.writeBuffer();
+      return Buffer.from(arrayBuffer);
+    }
+  } catch {
+    // Fall back to pure-JS SheetJS writer (e.g., edge runtimes)
   }
 
-  const arrayBuffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(arrayBuffer);
+  const XLSX = await import('xlsx');
+  const utils = XLSX.utils ?? XLSX.default?.utils;
+  const write = XLSX.write ?? XLSX.default?.write;
+  const wb = utils.book_new();
+  const ws = utils.aoa_to_sheet([headers, ...sanitizedRows]);
+  utils.book_append_sheet(wb, ws, safeSheet);
+  return Buffer.from(write(wb, { type: 'buffer', bookType: 'xlsx' }) as Uint8Array);
 }
 
 function detectDelimiter(sample: string): string {
