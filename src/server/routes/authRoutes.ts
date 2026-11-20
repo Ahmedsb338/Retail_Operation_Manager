@@ -69,25 +69,26 @@ export function createAuthRouter(): Router {
   router.get('/branches', async (req: AppRequest, res, next) => {
     try {
       const db = req.db!;
-      const activeRows = await db
-        .select({
-          code: branches.code,
-          name: branches.name,
-          nameAr: branches.nameAr,
-          city: branches.city,
-          cityAr: branches.cityAr,
-          area: branches.area,
-        })
-        .from(branches)
-        .where(eq(branches.isActive, true));
-
-      const unconfiguredRows = await db
-        .select({
-          branchName: unconfiguredBranches.branchName,
-          displayOrder: unconfiguredBranches.displayOrder,
-          statusNote: unconfiguredBranches.statusNote,
-        })
-        .from(unconfiguredBranches);
+      const [activeRows, unconfiguredRows] = await Promise.all([
+        db
+          .select({
+            code: branches.code,
+            name: branches.name,
+            nameAr: branches.nameAr,
+            city: branches.city,
+            cityAr: branches.cityAr,
+            area: branches.area,
+          })
+          .from(branches)
+          .where(eq(branches.isActive, true)),
+        db
+          .select({
+            branchName: unconfiguredBranches.branchName,
+            displayOrder: unconfiguredBranches.displayOrder,
+            statusNote: unconfiguredBranches.statusNote,
+          })
+          .from(unconfiguredBranches),
+      ]);
 
       unconfiguredRows.sort((a, b) => a.displayOrder - b.displayOrder);
 

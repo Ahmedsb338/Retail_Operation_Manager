@@ -23,8 +23,33 @@ export interface EnvLike {
   [key: string]: string | undefined;
 }
 
+export function resolveConnectionString(env: EnvLike = process.env): string {
+  const candidates = [env.DATABASE_URL, env.POSTGRES_URL, env.SUPABASE_DB_URL];
+  for (const val of candidates) {
+    if (val && String(val).trim() !== '') {
+      return String(val).trim();
+    }
+  }
+  return '';
+}
+
+export function detectSupabaseRestOnlyConfig(env: EnvLike = process.env): boolean {
+  const hasRestUrl = Boolean(
+    env.SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || env.VITE_SUPABASE_URL
+  );
+  const hasPublishableKey = Boolean(
+    env.SUPABASE_PUBLISHABLE_KEY ||
+      env.SUPABASE_ANON_KEY ||
+      env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      env.VITE_SUPABASE_ANON_KEY ||
+      env.VITE_SUPABASE_PUBLISHABLE_KEY
+  );
+  return hasRestUrl || hasPublishableKey;
+}
+
 export function getMissingDatabaseEnvVars(env: EnvLike = process.env): string[] {
-  if (env.DATABASE_URL && String(env.DATABASE_URL).trim() !== '') {
+  if (resolveConnectionString(env) !== '') {
     return [];
   }
   const required = ['SQL_HOST', 'SQL_DB_NAME', 'SQL_USER', 'SQL_PASSWORD'] as const;
@@ -39,10 +64,11 @@ export function resolvePgSslConfig(
   env: EnvLike = process.env
 ): false | { rejectUnauthorized: boolean; ca?: string } {
   const rawSsl = String(env.SQL_SSL || '').trim().toLowerCase();
+  const connStr = resolveConnectionString(env);
   let host = String(env.SQL_HOST || '').trim().toLowerCase();
-  if (!host && env.DATABASE_URL) {
+  if (!host && connStr) {
     try {
-      host = new URL(String(env.DATABASE_URL)).hostname.toLowerCase();
+      host = new URL(connStr).hostname.toLowerCase();
     } catch {
       // ignore invalid URL
     }
@@ -81,13 +107,15 @@ export function resolvePgSslConfig(
 
 function buildPoolConfig(env: EnvLike, maxConnections: number) {
   const ssl = resolvePgSslConfig(env);
-  if (env.DATABASE_URL && String(env.DATABASE_URL).trim() !== '') {
+  const connStr = resolveConnectionString(env);
+  if (connStr !== '') {
     return {
-      connectionString: String(env.DATABASE_URL).trim(),
+      connectionString: connStr,
       ...(ssl ? { ssl } : {}),
       max: maxConnections,
-      idleTimeoutMillis: maxConnections === 1 ? 5000 : 30000,
-      connectionTimeoutMillis: 15000,
+      idleTimeoutMillis: maxConnections === 1 ? 3000 : 30000,
+      connectionTimeoutMillis: 12000,
+      ...(maxConnections === 1 ? { allowExitOnIdle: true } : {}),
     };
   }
 
@@ -100,8 +128,9 @@ function buildPoolConfig(env: EnvLike, maxConnections: number) {
     database: env.SQL_DB_NAME,
     ssl,
     max: maxConnections,
-    idleTimeoutMillis: maxConnections === 1 ? 5000 : 30000,
-    connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: maxConnections === 1 ? 3000 : 30000,
+    connectionTimeoutMillis: 12000,
+    ...(maxConnections === 1 ? { allowExitOnIdle: true } : {}),
   };
 }
 

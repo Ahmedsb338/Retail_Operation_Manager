@@ -8,6 +8,7 @@ export const DatabaseUnavailableBanner: React.FC = () => {
     t,
     databaseUnavailable,
     databaseErrorMessage,
+    supabaseRestOnly,
     backendUnavailable,
     backendErrorMessage,
     missingDbVars,
@@ -24,7 +25,11 @@ export const DatabaseUnavailableBanner: React.FC = () => {
 
   const isBackendDown = backendUnavailable;
   const title = isBackendDown ? t('backendUnavailableTitle') : t('dbUnavailableTitle');
-  const body = isBackendDown ? t('backendUnavailableBody') : t('dbUnavailableBody');
+  const body = isBackendDown
+    ? t('backendUnavailableBody')
+    : supabaseRestOnly
+      ? t('supabaseRestOnlyNotice')
+      : t('dbUnavailableBody');
   const detail = isBackendDown ? backendErrorMessage : databaseErrorMessage;
 
   return (

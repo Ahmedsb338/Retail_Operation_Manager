@@ -16,6 +16,7 @@ import { createStaffAndWorkspaceRouter } from './routes/staffAndWorkspaceRoutes.
 export interface CreateAppOptions {
   getDb: () => AppDatabase;
   isDbConfigured: () => boolean;
+  hasSupabaseRestOnly?: () => boolean;
   acquireRequestDb?: () => RequestDbHandle;
   getAiClient: () => GoogleGenAI | null;
   httpServer?: http.Server;
@@ -56,20 +57,24 @@ export async function createApp(options: CreateAppOptions): Promise<express.Expr
 
   // Public health endpoint (never blocks on DB outage so monitoring & UI detect DB state cleanly)
   app.get('/api/v1/health', (_req: Request, res: Response) => {
+    const databaseConfigured = options.isDbConfigured();
     res.json({
       status: 'ok',
       service: 'ASB Workforce Retail Operations Backend',
-      databaseConfigured: options.isDbConfigured(),
+      databaseConfigured,
+      supabaseRestOnly: !databaseConfigured && Boolean(options.hasSupabaseRestOnly?.()),
       geminiConfigured: Boolean(options.getAiClient()),
       timestamp: new Date().toISOString(),
     });
   });
 
   app.get('/api/health', (_req: Request, res: Response) => {
+    const databaseConfigured = options.isDbConfigured();
     res.json({
       status: 'ok',
       service: 'ASB Workforce Retail Operations Backend',
-      databaseConfigured: options.isDbConfigured(),
+      databaseConfigured,
+      supabaseRestOnly: !databaseConfigured && Boolean(options.hasSupabaseRestOnly?.()),
       geminiConfigured: Boolean(options.getAiClient()),
       timestamp: new Date().toISOString(),
     });

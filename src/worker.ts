@@ -4,6 +4,7 @@ import { env as workerEnv } from 'cloudflare:workers';
 import { GoogleGenAI } from '@google/genai';
 import {
   createRequestScopedDb,
+  detectSupabaseRestOnlyConfig,
   getDb,
   isDatabaseConfigured,
   type EnvLike,
@@ -19,6 +20,17 @@ const WORKER_ENV_KEYS = [
   'SQL_SSL',
   'SQL_SSL_CA',
   'DATABASE_URL',
+  'POSTGRES_URL',
+  'SUPABASE_DB_URL',
+  'SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'VITE_SUPABASE_URL',
+  'SUPABASE_PUBLISHABLE_KEY',
+  'SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+  'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASE_ANON_KEY',
+  'VITE_SUPABASE_PUBLISHABLE_KEY',
   'GEMINI_API_KEY',
   'ALLOWED_ORIGINS',
   'APP_URL',
@@ -42,7 +54,6 @@ function readWorkerEnv(): EnvLike {
     workerEnv.HYPERDRIVE.connectionString.trim() !== ''
   ) {
     merged.DATABASE_URL = workerEnv.HYPERDRIVE.connectionString;
-    // Hyperdrive handles TLS termination between Worker and Postgres
     if (!merged.SQL_SSL) {
       merged.SQL_SSL = 'false';
     }
@@ -70,12 +81,17 @@ const WORKER_PORT = 8080;
 const appPromise = createApp({
   getDb,
   isDbConfigured: () => isDatabaseConfigured(readWorkerEnv()),
+  hasSupabaseRestOnly: () => {
+    const env = readWorkerEnv();
+    return !isDatabaseConfigured(env) && detectSupabaseRestOnlyConfig(env);
+  },
   acquireRequestDb: () => createRequestScopedDb(readWorkerEnv()),
   getAiClient: buildWorkerAiClient,
   mountFrontend: 'none',
 });
 
 const server = http.createServer((req, res) => {
+  readWorkerEnv();
   appPromise
     .then((app) => {
       app(req, res);

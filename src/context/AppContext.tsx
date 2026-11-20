@@ -56,6 +56,7 @@ interface AppContextType {
   dataLoading: boolean;
   databaseUnavailable: boolean;
   databaseErrorMessage: string;
+  supabaseRestOnly: boolean;
   backendUnavailable: boolean;
   backendErrorMessage: string;
   missingDbVars: string[];
@@ -361,6 +362,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [dataLoading, setDataLoading] = useState<boolean>(false);
   const [databaseUnavailable, setDatabaseUnavailable] = useState<boolean>(false);
   const [databaseErrorMessage, setDatabaseErrorMessage] = useState<string>('');
+  const [supabaseRestOnly, setSupabaseRestOnly] = useState<boolean>(false);
   const [backendUnavailable, setBackendUnavailable] = useState<boolean>(false);
   const [backendErrorMessage, setBackendErrorMessage] = useState<string>('');
   const [missingDbVars, setMissingDbVars] = useState<string[]>([]);
@@ -432,6 +434,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const health = await apiRequest<{
         databaseConfigured: boolean;
+        supabaseRestOnly?: boolean;
         geminiConfigured: boolean;
       }>('/api/v1/health', { skipAuthRedirect: true });
       setBackendUnavailable(false);
@@ -439,8 +442,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setGeminiConfigured(Boolean(health.geminiConfigured));
       if (!health.databaseConfigured) {
         setDatabaseUnavailable(true);
+        setSupabaseRestOnly(Boolean(health.supabaseRestOnly));
       } else {
         setDatabaseUnavailable(false);
+        setSupabaseRestOnly(false);
         setDatabaseErrorMessage('');
         setMissingDbVars([]);
       }
@@ -470,6 +475,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       try {
         const health = await apiRequest<{
           databaseConfigured: boolean;
+          supabaseRestOnly?: boolean;
           geminiConfigured: boolean;
         }>('/api/v1/health', { skipAuthRedirect: true });
         if (!active) return;
@@ -478,9 +484,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setGeminiConfigured(Boolean(health.geminiConfigured));
         if (!health.databaseConfigured) {
           setDatabaseUnavailable(true);
+          setSupabaseRestOnly(Boolean(health.supabaseRestOnly));
           setAuthLoading(false);
           return;
         }
+        setSupabaseRestOnly(false);
         await reloadBranchesCatalog();
         try {
           const me = await apiRequest<{ user: AuthUser }>('/api/v1/auth/me', {
@@ -1335,6 +1343,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         dataLoading,
         databaseUnavailable,
         databaseErrorMessage,
+        supabaseRestOnly,
         backendUnavailable,
         backendErrorMessage,
         missingDbVars,
