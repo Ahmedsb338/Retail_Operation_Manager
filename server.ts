@@ -52,15 +52,13 @@ async function startServer() {
     mountDevFrontend: isProduction
       ? undefined
       : (expressApp) => {
-          const hmrSetting =
-            process.env.DISABLE_HMR === 'true'
-              ? false
-              : { server: httpServer };
+          const isHmrDisabled = process.env.DISABLE_HMR === 'true';
           const vitePromise = import('vite').then(({ createServer: createViteServer }) =>
             createViteServer({
               server: {
                 middlewareMode: true,
-                hmr: hmrSetting,
+                hmr: !isHmrDisabled,
+                ws: isHmrDisabled ? false : { server: httpServer },
               },
               appType: 'spa',
             })
@@ -68,6 +66,32 @@ async function startServer() {
           vitePromise.catch((err) => {
             console.error('[ASB Workforce] Vite middleware failed to initialize:', err);
           });
+          if (isHmrDisabled) {
+            expressApp.get('/@vite/client', (req, res, next) => {
+              vitePromise
+                .then(async (vite) => {
+                  const transformed = await vite.transformRequest('/@vite/client');
+                  if (!transformed?.code) {
+                    vite.middlewares(req, res, next);
+                    return;
+                  }
+                  const patched = transformed.code
+                    .replace(
+                      'transport.connect(createHMRHandler(handleMessage));',
+                      '/* WebSocket disabled when DISABLE_HMR=true */'
+                    )
+                    .replace(
+                      'setupForwardConsoleHandler(transport, forwardConsole);',
+                      '/* Console forwarding disabled when DISABLE_HMR=true */'
+                    );
+                  res.status(200);
+                  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+                  res.setHeader('Cache-Control', 'no-cache');
+                  res.end(patched);
+                })
+                .catch(next);
+            });
+          }
           expressApp.use((req, res, next) => {
             vitePromise.then((vite) => vite.middlewares(req, res, next)).catch(next);
           });
